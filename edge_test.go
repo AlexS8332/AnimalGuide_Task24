@@ -226,6 +226,9 @@ func (a *edgeApp) seed(t *testing.T) {
 	a.cite = d.ID
 	a.turn(t, a.cite, agents.Request{Text: "Сколько весит фосса?"})
 	a.turn(t, a.cite, agents.Request{Text: "А чем питается ксенофоб?"})
+	a.turn(t, a.cite, agents.Request{Text: "Сколько весит манул?"})
+	a.turn(t, a.cite, agents.Request{Text: "Сколько лет живёт манул?"})
+	a.turn(t, a.cite, agents.Request{Text: "Как манул по-латыни?"})
 
 	e, err := a.m.Create(runs.StartOptions{})
 	if err != nil {
