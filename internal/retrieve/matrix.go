@@ -24,8 +24,9 @@ func Presets(paid bool) []Named {
 		{Name: "rewrite", Config: Config{Rewrite: RewriteCode}},
 		// both — переписывание и фильтр, без гибрида: на dev гибрид в both
 		// дал только −D16 (ранг 5 → 12) и MRR 0.63 → 0.53. Гибрид —
-		// отдельной строкой hybrid.
-		{Name: "both", Config: Config{Rewrite: RewriteCode, Filter: true}},
+		// отдельной строкой hybrid. С v24 — с рамкой якоря (Scope):
+		// фрагменты чужих видов при названном виде отсекаются.
+		{Name: "both", Config: Config{Rewrite: RewriteCode, Filter: true, Scope: true}},
 		{Name: "hybrid", Config: Config{Rewrite: RewriteCode, Rerank: RerankHybrid, Filter: true}},
 	}
 	if paid {
@@ -47,6 +48,9 @@ func (c Config) Describe() string {
 	}
 	if c.Filter {
 		parts = append(parts, "filter")
+	}
+	if c.Filter && c.Scope {
+		parts = append(parts, "scope")
 	}
 	if len(parts) == 0 {
 		return "dense top-K1, без фильтра и переписывания"

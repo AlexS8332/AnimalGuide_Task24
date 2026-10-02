@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/kb"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/retrieve"
@@ -73,6 +74,12 @@ type SearchResult struct {
 // по признаку Untrusted (механизм envelope), как у Википедии, — иначе при
 // включённом envelope она стояла бы дважды.
 func SearchTool(s *kb.Searcher, index string, k int) tools.Tool {
+	return searchTool(s, index, k, nil)
+}
+
+// searchTool — SearchTool с наблюдателем выдачи (механизм rag.cite: чьи
+// chunk_id выдавались в этом ходе); obs == nil — без наблюдения.
+func searchTool(s *kb.Searcher, index string, k int, obs *issued) tools.Tool {
 	index = orIndex(index)
 	k = orK(k)
 	return tools.Func{
@@ -102,6 +109,7 @@ func SearchTool(s *kb.Searcher, index string, k int) tools.Tool {
 			if err != nil {
 				return "", fmt.Errorf("поиск по базе знаний: %w", err)
 			}
+			obs.add(hits)
 			out := SearchResult{Query: in.Query, Index: info.Index, Mode: info.Mode, Fallback: info.Fallback,
 				Hits: make([]SearchHit, 0, len(hits))}
 			for _, h := range hits {
@@ -123,6 +131,13 @@ func SearchTool(s *kb.Searcher, index string, k int) tools.Tool {
 // теме. Ответ — кратко: переписанный запрос (если переписан), сколько
 // отсечено фильтром и заметка; полный путь поиска — в окне «База знаний».
 func PipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k int) tools.Tool {
+	return pipelineTool(p, c, history, k, nil)
+}
+
+// pipelineTool — PipelineTool с наблюдателем выдачи (rag.cite): выдача
+// каждого вызова копится в obs, а вызов кодом, уже посчитанный хуком ради
+// Gate (obs.pre), второй раз не ищется.
+func pipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k int, obs *issued) tools.Tool {
 	k = orK(k)
 	c.Index = orIndex(c.Index)
 	if c.Rewrite == retrieve.RewriteNone {
@@ -151,10 +166,15 @@ func PipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k i
 			if in.K > 0 {
 				cc.K1 = orK(in.K)
 			}
-			t, err := p.Search(ctx, retrieve.Query{Text: in.Query, Context: history}, cc)
-			if err != nil {
-				return "", fmt.Errorf("поиск по базе знаний: %w", err)
+			t, note, ok := obs.take(in.Query, cc.K1)
+			if !ok {
+				var err error
+				t, err = p.Search(ctx, retrieve.Query{Text: in.Query, Context: history}, cc)
+				if err != nil {
+					return "", fmt.Errorf("поиск по базе знаний: %w", err)
+				}
 			}
+			obs.add(t.Hits)
 			out := SearchResult{Query: in.Query, Index: t.Info.Index, Mode: t.Info.Mode, Fallback: t.Info.Fallback,
 				Hits: make([]SearchHit, 0, len(t.Hits))}
 			if t.Rewritten != "" && t.Rewritten != t.Original {
@@ -171,6 +191,7 @@ func PipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k i
 			if t.Info.Fallback != "" && cc.Filter {
 				out.Note = joinNote(out.Note, "поиск без векторов — порог только относительный")
 			}
+			out.Note = joinNote(out.Note, note)
 			for _, h := range t.Hits {
 				out.Hits = append(out.Hits, SearchHit{ChunkID: h.ID, Title: h.Title, Section: h.Section, Path: pathOf(h.Chunk),
 					Score: math.Round(h.Score*1000) / 1000, URL: h.URL, Text: h.Text})
@@ -178,6 +199,65 @@ func PipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k i
 			return tools.Result(out)
 		},
 	}
+}
+
+// issued — выдача kb_search одного хода (механизм rag.cite): все фрагменты,
+// которые ведущий получил — вызовом кодом и своими вызовами, — без
+// повторов. По ней kb_answer проверяет, что chunk_id выдавались в этом
+// ходе. pre — вызов кодом, уже посчитанный хуком ради Gate: инструмент
+// отдаёт его, а не ищет второй раз (та же выдача и без второго запроса к
+// эмбеддеру); note — пометка к его ответу. Методы безопасны на nil.
+type issued struct {
+	mu   sync.Mutex
+	hits []kb.Hit
+	seen map[string]bool
+
+	pre      *retrieve.Trace
+	preQuery string
+	preK     int
+	preNote  string
+}
+
+func (o *issued) add(hits []kb.Hit) {
+	if o == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.seen == nil {
+		o.seen = map[string]bool{}
+	}
+	for _, h := range hits {
+		if !o.seen[h.ID] {
+			o.seen[h.ID] = true
+			o.hits = append(o.hits, h)
+		}
+	}
+}
+
+// Hits — копия выдачи хода.
+func (o *issued) Hits() []kb.Hit {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]kb.Hit(nil), o.hits...)
+}
+
+// take — посчитанный хуком вызов кодом, если запрос тот же (один раз).
+func (o *issued) take(query string, k int) (retrieve.Trace, string, bool) {
+	if o == nil {
+		return retrieve.Trace{}, "", false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.pre == nil || query != o.preQuery || k != o.preK {
+		return retrieve.Trace{}, "", false
+	}
+	t, note := *o.pre, o.preNote
+	o.pre = nil
+	return t, note, true
 }
 
 func joinNote(a, b string) string {

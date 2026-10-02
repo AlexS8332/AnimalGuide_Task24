@@ -566,12 +566,93 @@ func TestPresetsAndDescribe(t *testing.T) {
 	for _, n := range Presets(true) {
 		names = append(names, n.Name+"="+n.Config.Describe())
 	}
-	want := "base=dense top-K1, без фильтра и переписывания; filter=filter; rewrite=rewrite code; both=rewrite code, filter; " +
+	want := "base=dense top-K1, без фильтра и переписывания; filter=filter; rewrite=rewrite code; both=rewrite code, filter, scope; " +
 		"hybrid=rewrite code, rerank hybrid, filter; llm-rewrite=rewrite llm, filter; llm-rerank=rewrite code, rerank llm, filter"
 	if got := strings.Join(names, "; "); got != want {
 		t.Fatalf("пресеты:\n%s", got)
 	}
 	if len(Presets(false)) != 5 {
 		t.Fatal("бесплатных — пять")
+	}
+}
+
+// TestFinishScope — рамка якоря (v24): при названном виде фрагменты статей
+// других видов отсекаются с причиной «другой вид», обзорные статьи и MDD
+// (документы без вида) остаются; относительный порог меряется от лучшего
+// фрагмента внутри рамки — лучший фрагмент чужого вида его не задаёт.
+func TestFinishScope(t *testing.T) {
+	mk := func(scope bool) Trace {
+		tr := trace(Config{Filter: true, Scope: scope},
+			cand("bear", "brown-bear", 0, 9, 0.90, 1), // чужой вид, лучший косинус
+			cand("rp1", "red-panda", 0, 9, 0.84, 2),   // хуже лучшего на 0.06, но лучший в рамке
+			cand("rp2", "red-panda", 10, 19, 0.83, 3),
+			cand("ov", "carnivora", 0, 9, 0.82, 4), // обзор без вида
+		)
+		tr.Anchored = []string{"малая панда"}
+		tr.cos = []map[string]float64{{"bear": 0.90, "rp1": 0.84, "rp2": 0.83, "ov": 0.82}}
+		leads(&tr, tr.cos)
+		return tr
+	}
+	al := AliasesOf(miniDocs())
+	tr := mk(true)
+	scopeOf(al, &tr)
+	finish(&tr)
+	if got := reasons(tr); got != "bear:другой вид rp1:ok rp2:ok ov:ok" || strings.Join(tr.Scope, ",") != "red-panda" {
+		t.Fatalf("рамка: %s %v", got, tr.Scope)
+	}
+	if !tr.Candidates[0].FilterCut() {
+		t.Fatal("«другой вид» — отсев фильтром")
+	}
+	// Без Scope — как в v23: чужой вид остаётся, свой отсечён относительным
+	// порогом от чужого лучшего.
+	tr = mk(false)
+	scopeOf(al, &tr)
+	finish(&tr)
+	if got := reasons(tr); got != "bear:ok rp1:хуже лучшего на 0.05 rp2:хуже лучшего на 0.05 ov:хуже лучшего на 0.05" {
+		t.Fatalf("без рамки: %s", got)
+	}
+	// Без якоря рамки нет.
+	tr = mk(true)
+	tr.Anchored = nil
+	scopeOf(al, &tr)
+	if len(tr.Scope) != 0 {
+		t.Fatalf("без якоря: %v", tr.Scope)
+	}
+	// Словарь без документов — рамки нет.
+	tr = mk(true)
+	scopeOf(&Aliases{Canon: al.Canon}, &tr)
+	if len(tr.Scope) != 0 {
+		t.Fatal("словарь без Docs")
+	}
+}
+
+// TestSearchScope — рамка на настоящем поиске мини-корпуса: «кошачий
+// медведь» — только малая панда и обзор, медведь отсечён как другой вид.
+func TestSearchScope(t *testing.T) {
+	p := miniPipeline(t)
+	tr, err := p.Search(context.Background(), Query{Text: "Сколько весит кошачий медведь?"},
+		Config{Rewrite: RewriteCode, Filter: true, Scope: true, Delta: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tr.Scope, ",") != "red-panda" {
+		t.Fatalf("рамка: %v", tr.Scope)
+	}
+	for _, h := range tr.Hits {
+		if h.DocID == "brown-bear" || h.DocID == "corsac" {
+			t.Fatalf("чужой вид в итоге: %s", h.ID)
+		}
+	}
+	cut := 0
+	for _, c := range tr.Candidates {
+		if c.Reason == ReasonScope {
+			cut++
+			if c.DocID == "red-panda" || c.DocID == "carnivora" {
+				t.Fatalf("отсечён свой или обзор: %s", c.ID)
+			}
+		}
+	}
+	if cut == 0 || len(tr.Hits) == 0 {
+		t.Fatalf("рамка не сработала: %s", reasons(tr))
 	}
 }

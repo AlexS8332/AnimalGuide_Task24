@@ -84,7 +84,7 @@ func Eval(ctx context.Context, a *Answerer, qs kb.QuestionSet, o EvalOptions) (R
 				if err != nil {
 					run.Answer.Mode, run.Error = m, err.Error()
 				} else {
-					run.Rule = Rule(q, ans.Text)
+					run.Rule = Rule(q, GradedText(ans))
 					run.Final = run.Rule.Verdict
 					if m.UsesBase() {
 						// Recall — по выдаче, которую увидела модель: у режимов
@@ -117,17 +117,32 @@ func Eval(ctx context.Context, a *Answerer, qs kb.QuestionSet, o EvalOptions) (R
 			rng.Shuffle(len(refs), func(i, j int) { refs[i], refs[j] = refs[j], refs[i] })
 			for _, x := range refs {
 				run := &row.Runs[x.m][x.i]
-				jr, err := o.Judge.Grade(ctx, q, run.Answer.Text)
+				jr, err := o.Judge.Grade(ctx, q, GradedText(run.Answer))
 				rep.JudgeCost = rep.JudgeCost.Add(jr.Cost)
 				if ctx.Err() != nil {
 					return rep, ctx.Err()
 				}
 				if err != nil {
 					run.JudgeError = err.Error()
-					continue
+				} else {
+					run.Judge = &jr
+					run.Final = jr.Verdict
 				}
-				run.Judge = &jr
-				run.Final = jr.Verdict
+				if c := run.Answer.Cited; c != nil {
+					// Смысл ответа против его цитат — отдельный запрос судьи
+					// смысла (v24): вердикт «верно по эталону» и «сказано в
+					// цитатах» — разные вопросы.
+					sp, err := o.Judge.CheckSupport(ctx, c.Cited)
+					rep.JudgeCost = rep.JudgeCost.Add(sp.Cost)
+					if ctx.Err() != nil {
+						return rep, ctx.Err()
+					}
+					if err != nil {
+						run.SupportError = err.Error()
+						continue
+					}
+					run.Answer.Support = &sp
+				}
 			}
 		}
 		for _, m := range modes {
@@ -147,6 +162,15 @@ func Eval(ctx context.Context, a *Answerer, qs kb.QuestionSet, o EvalOptions) (R
 	rep.Disagreements = disagreements(rep.Rows, modes)
 	rep.Conclusion = conclude(rep)
 	return rep, nil
+}
+
+// GradedText — что оценивают правило и судья: у rag+cite — сам ответ
+// (Cited.EvalText) без обвязки «Источники/Цитаты», у остальных — текст.
+func GradedText(a Answer) string {
+	if a.Cited != nil {
+		return a.Cited.Cited.EvalText()
+	}
+	return a.Text
 }
 
 // goodness — насколько вердикт хорош для этого вопроса: у неотвечаемого
@@ -221,6 +245,7 @@ func modeStats(m Mode, rows []Row) ModeStats {
 	st := ModeStats{Mode: m}
 	var ms int64
 	answered, transitions, recallN, recallHit, agree := 0, 0, 0, 0, 0
+	quotes, verbatim := 0, 0
 	for _, row := range rows {
 		runs := row.Runs[m]
 		if len(runs) == 0 {
@@ -277,6 +302,9 @@ func modeStats(m Mode, rows []Row) ModeStats {
 					agree++
 				}
 			}
+			if c := r.Answer.Cited; c != nil {
+				citeStats(&st, q, *c, r.Answer.Support, &quotes, &verbatim)
+			}
 		}
 		transitions += max(valid-1, 0)
 	}
@@ -292,7 +320,47 @@ func modeStats(m Mode, rows []Row) ModeStats {
 	if transitions > 0 {
 		st.FlipRate = float64(st.Flips) / float64(transitions)
 	}
+	if quotes > 0 {
+		st.Verbatim = float64(verbatim) / float64(quotes)
+	}
 	return st
+}
+
+// citeStats — числа rag+cite одного прогона: источники и цитаты у
+// answered, дословность цитат, смысл (судья), «не проверено», «не знаю»
+// кодом и ложные «не знаю» на отвечаемых.
+func citeStats(st *ModeStats, q kb.Question, r CitedResult, sp *Support, quotes, verbatim *int) {
+	st.Cited++
+	st.Rejects += r.Check.Rejects
+	if r.Check.Unverified {
+		st.Unverified++
+	}
+	if r.Cited.Unknown() {
+		st.Unknown++
+		if r.Check.Forced {
+			st.ForcedUnknown++
+		}
+		if q.Answerable {
+			st.FalseUnknown++
+		}
+		return
+	}
+	st.Answered++
+	if r.Check.HasSources {
+		st.WithSources++
+	}
+	if r.Check.HasQuotes {
+		st.WithQuotes++
+	}
+	n := len(r.Cited.Quotes)
+	*quotes += n
+	*verbatim += n - len(r.Check.NotVerbatim)
+	if sp != nil {
+		st.SupportChecked++
+		if sp.OK {
+			st.Supported++
+		}
+	}
 }
 
 // disagreements — где правило и судья разошлись: для ручного просмотра.
@@ -387,6 +455,11 @@ func conclude(r Report) []string {
 			"У norag это ответ из памяти модели (база его не подтверждает и не опровергает), у rag — ответ мимо фрагментов.",
 			un, strings.Join(ab, ", "), strings.Join(au, ", ")))
 	}
+	for _, s := range r.Stats {
+		if s.Cited > 0 {
+			out = append(out, citeLine(s))
+		}
+	}
 	judged, agree := 0, 0.0
 	var costs []string
 	for _, s := range r.Stats {
@@ -403,6 +476,18 @@ func conclude(r Report) []string {
 	}
 	out = append(out, tail+".")
 	return out
+}
+
+// citeLine — вывод по rag+cite числами.
+func citeLine(s ModeStats) string {
+	line := fmt.Sprintf("%s: ответов по существу %d, «не знаю» %d (по решению кода %d, на отвечаемых вопросах %d); "+
+		"с источниками %d из %d, с цитатами %d из %d, дословных цитат %.0f %%; не проверено %d, отказов проверки %d",
+		s.Mode, s.Answered, s.Unknown, s.ForcedUnknown, s.FalseUnknown, s.WithSources, s.Answered, s.WithQuotes, s.Answered,
+		100*s.Verbatim, s.Unverified, s.Rejects)
+	if s.SupportChecked > 0 {
+		line += fmt.Sprintf("; смысл подтверждён цитатами у %d из %d", s.Supported, s.SupportChecked)
+	}
+	return line + "."
 }
 
 func abs(x int) int {

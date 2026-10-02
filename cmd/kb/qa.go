@@ -24,7 +24,7 @@ func runQA(ctx context.Context, args []string, out, errOut io.Writer) int {
 	fs := newFlagSet("qa", "[флаги]", errOut)
 	questions := fs.String("questions", "eval/questions.json", "контрольные вопросы")
 	splits := fs.String("splits", kb.SplitTest, "наборы через запятую: test, dev, out")
-	modes := fs.String("modes", "norag,rag", "режимы через запятую: norag, rag, rag+filter, rag+rewrite, rag+both")
+	modes := fs.String("modes", "norag,rag", "режимы через запятую: norag, rag, rag+filter, rag+rewrite, rag+both, rag+cite (out — для «не знаю»: -splits test,out)")
 	repeat := fs.Int("repeat", 1, "повторов каждого режима (≥ 2 — замер шума модели)")
 	judge := fs.Bool("judge", true, "оценка судьёй-моделью (без судьи — только правило)")
 	seed := fs.Int64("seed", 22, "порядок, в котором судья видит ответы")

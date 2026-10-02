@@ -29,6 +29,21 @@ const HookName = "rag"
 // сверх одного.
 const leadRule = `База знаний (kb_search) — снимок статей справочника и MDD v2.5. Если сразу после реплики человека стоит выдача kb_search, это вызов кодом до твоего первого шага: опирайся на неё и называй фрагменты по chunk_id в квадратных скобках, например [manul/structure/004]. Если выдача не отвечает на вопрос — скажи, что в базе знаний этого нет, и при необходимости вызови kb_search сам другими словами или иди в Википедию или GBIF.`
 
+// citeLeadRule — правило ведущего при механизме rag.cite (v24) вместо
+// leadRule. Отличие от leadRule — запасного пути в Википедию и GBIF нет:
+// ответ с источниками обещает человеку, что каждый факт стоит в цитате из
+// базы, а статью Википедии kb_answer процитировать не даст (chunk_id
+// только из выдачи kb_search). Условие «если среди твоих инструментов есть
+// kb_answer» — потому что правило хода получает и составитель подборки, у
+// которого завершающего инструмента нет. Правило постоянное (одно и то же
+// каждый ход): решение кода «только не знаю» приходит схемой kb_answer и
+// пометкой в выдаче, а не правкой системного промпта — иначе ход с
+// «не знаю» обнулял бы кэш префикса окна.
+const citeLeadRule = `База знаний (kb_search) — снимок статей справочника и MDD v2.5. Если сразу после реплики человека стоит выдача kb_search, это вызов кодом до твоего первого шага: опирайся на неё. Если среди твоих инструментов есть kb_answer — ход заканчивай только им, не текстом, и отвечай только по выдаче kb_search этого хода (Википедия и GBIF для ответа не годятся: их не процитировать):
+- answer — кратко, без ссылок [chunk_id]; sources — chunk_id фрагментов из выдачи; quotes — куски текста фрагментов, скопированные ДОСЛОВНО (не короче 15 символов, пропуск — «…»); числа ответа — только из цитат;
+- ответа в выдаче нет (можно сначала вызвать kb_search другими словами) — status unknown: в answer — чего нет в базе знаний, в clarify — уточняющий вопрос человеку;
+- kb_answer вернул ошибку — исправь названное и вызови снова.`
+
 // hintNoKB — что сделать, если базы нет.
 const hintNoKB = "соберите базу: go run ./cmd/kb index -strategy all (путь к другой базе — флаг -kb или KB_DB)"
 
@@ -51,6 +66,11 @@ const hintNoKB = "соберите базу: go run ./cmd/kb index -strategy all
 // фильтр — ModeConfig(RAGFilter), переписывание — ModeConfig(RAGRewrite),
 // оба — ModeConfig(RAGBoth). Контекст переписывания — прошлые реплики
 // человека из окна хода (Request.Window).
+//
+// Механизм v24 rag.cite (требует rag): ведущий заканчивает ход только
+// завершающим kb_answer (Request.Finish), выдача kb_search этого хода
+// (вызов кодом и вызовы моделью) копится для проверки chunk_id и цитат, а
+// «только не знаю» решает Gate по трассе вызова кодом (Hook.cite).
 type Hook struct {
 	Searcher *kb.Searcher
 	Index    string // пусто — DefaultIndex
@@ -133,17 +153,27 @@ func (h *Hook) Before(ctx context.Context, t *runs.Turn) error {
 	}
 	index, k := orIndex(h.Index), orK(h.K)
 	names, cfg, piped := mechanisms(t)
+	// rag.cite: выдача хода копится (kb_answer проверяет по ней chunk_id и
+	// цитаты), а правило ведущего — без запасного пути в Википедию.
+	cite := t.Features.On(features.RAGCite)
+	var obs *issued
+	rule := leadRule
+	if cite {
+		obs, rule = &issued{}, citeLeadRule
+	}
 	via, detail := "", ""
+	var history []string
 	if piped {
 		cfg.Index = index
-		t.Request.Tools = append(t.Request.Tools, PipelineTool(h.pipeline(), cfg, humanTurns(t), k))
+		history = humanTurns(t)
+		t.Request.Tools = append(t.Request.Tools, pipelineTool(h.pipeline(), cfg, history, k, obs))
 		via = "; " + strings.Join(names, ", ")
 		detail = "\nВторой этап поиска (" + strings.Join(names, ", ") + "): " + cfg.Describe() +
 			". Переписанный запрос идёт только в поиск, ведущий видит исходную реплику; в ответе kb_search — переписанный запрос и сколько фрагментов отсёк фильтр."
 	} else {
-		t.Request.Tools = append(t.Request.Tools, SearchTool(h.Searcher, index, k))
+		t.Request.Tools = append(t.Request.Tools, searchTool(h.Searcher, index, k, obs))
 	}
-	t.Request.Rules = join(t.Request.Rules, leadRule)
+	t.Request.Rules = join(t.Request.Rules, rule)
 	text := strings.TrimSpace(t.Request.Text)
 	if text == "" {
 		t.Em.Log(agent.Event{Agent: HookName, Kind: agent.EventMechanism, Mechanism: string(features.RAG),
@@ -163,13 +193,123 @@ func (h *Hook) Before(ctx context.Context, t *runs.Turn) error {
 			"и называть [chunk_id]; нет ответа в выдаче — сказать об этом и при необходимости идти в Википедию или GBIF.\n" +
 			"Оговорка: голое название животного («манул») и «сравни …» идут мимо ведущего (карточка, сравнение) — " +
 			"запроса ведущего тогда нет, и вызова kb_search не будет. Сам вызов — отдельное событие журнала инструментов." + detail})
+	if cite {
+		h.cite(ctx, t, obs, piped, cfg, history, k, text)
+	}
 	return nil
+}
+
+// cite — механизм rag.cite: ведущий заканчивает ход только kb_answer
+// (Request.Finish), проверка — по выдаче kb_search этого хода (obs). Gate
+// — по трассе вызова кодом: хук считает её сам до хода (тот же запрос,
+// что в Preload; инструмент потом отдаёт её, не ища второй раз), и если
+// фильтр отсёк всё — схема kb_answer на этот ход разрешает только unknown,
+// а к выдаче kb_search добавлена пометка. Без фильтра (rag без rag.filter и
+// rag.rewrite) трассы нет: «только unknown» — по пустой выдаче в момент
+// вызова kb_answer (Finisher). Принятый ответ — в итогах хода (Extras,
+// ключ rag.cite) для окна.
+func (h *Hook) cite(ctx context.Context, t *runs.Turn, obs *issued, piped bool, cfg retrieve.Config, history []string, k int, text string) {
+	gated, why := false, ""
+	gateLine := "трассы нет (без rag.filter и rag.rewrite) — «только не знаю» по пустой выдаче"
+	if piped {
+		cc := cfg
+		cc.K1 = k
+		if cc.Rewrite == retrieve.RewriteNone {
+			history = nil
+		}
+		tr, err := h.pipeline().Search(ctx, retrieve.Query{Text: text, Context: history}, cc)
+		switch {
+		case err != nil:
+			gateLine = "поиск до хода не удался (" + err.Error() + ") — «только не знаю» по пустой выдаче"
+		default:
+			obs.pre, obs.preQuery, obs.preK = &tr, text, cc.K1
+			gated, why = Gate(&tr, tr.Hits)
+			gateLine = "контекст есть — ответ по существу разрешён"
+			if gated {
+				obs.preNote = "kb_answer на этот ход примет только status unknown с уточняющим вопросом: " + why
+				gateLine = "«только не знаю»: " + why
+			}
+		}
+	}
+	fin := Finisher(obs.Hits, gated, why)
+	inner := fin.Handle
+	fin.Handle = func(ctx context.Context, callID string, args json.RawMessage) (any, error) {
+		res, err := inner(ctx, callID, args)
+		if r, ok := res.(*CitedResult); ok && err == nil {
+			t.Extra(string(features.RAGCite), ViewOf(r, gated, why))
+		}
+		return res, err
+	}
+	t.Request.Finish = append(t.Request.Finish, fin)
+	t.Em.Log(agent.Event{Agent: HookName, Kind: agent.EventMechanism, Mechanism: string(features.RAGCite), Tool: FinishName,
+		Title: "ответ с источниками: ведущий заканчивает ход только kb_answer; " + gateLine,
+		Detail: "Код проверит ответ до человека: chunk_id — из выдачи kb_search этого хода, у ответа есть источник и цитата, " +
+			"каждая цитата — дословный кусок своего фрагмента, числа ответа стоят в цитатах. Не прошло — отказ с подсказкой и ещё " +
+			fmt.Sprintf("один запрос ведущего; после %d отказов ответ принимается с пометкой «не проверено».", MaxRejects)})
+}
+
+// CiteView — ответ kb_answer в итогах хода (Extras, ключ rag.cite): для
+// окна — чипы источников «[1] Манул › Питание», цитаты, «не знаю» и
+// уточнение, итог проверки кодом.
+type CiteView struct {
+	Text       string        `json:"text"`
+	Cited      Cited         `json:"cited"`
+	Check      CiteCheck     `json:"check"`
+	Gated      bool          `json:"gated,omitempty"`
+	GateReason string        `json:"gate_reason,omitempty"`
+	Sources    []CiteViewSrc `json:"sources,omitempty"`
+}
+
+// CiteViewSrc — источник ответа с номером и заголовком из выдачи.
+type CiteViewSrc struct {
+	N       int    `json:"n"`
+	ChunkID string `json:"chunk_id"`
+	Title   string `json:"title,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Issued  bool   `json:"issued"` // выдавался в этом ходе
+}
+
+// ViewOf — CiteView принятого ответа.
+func ViewOf(r *CitedResult, gated bool, why string) CiteView {
+	v := CiteView{Text: r.Text(), Cited: r.Cited, Check: r.Check, Gated: gated, GateReason: why}
+	if r.Cited.Unknown() {
+		return v
+	}
+	byID := map[string]kb.Hit{}
+	for _, h := range r.Hits {
+		byID[h.ID] = h
+	}
+	seen := map[string]bool{}
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			return
+		}
+		seen[id] = true
+		s := CiteViewSrc{N: len(v.Sources) + 1, ChunkID: id}
+		if h, ok := byID[id]; ok {
+			s.Title, s.Path, s.Issued = h.Title, pathOf(h.Chunk), true
+		}
+		v.Sources = append(v.Sources, s)
+	}
+	for _, s := range r.Cited.Sources {
+		add(s.ChunkID)
+	}
+	for _, q := range r.Cited.Quotes {
+		add(q.ChunkID)
+	}
+	return v
 }
 
 // off — базы нет: ход идёт без kb_search, в журнале причина и подсказка, в
 // итоговом наборе хода механизм выключен.
 func (h *Hook) off(t *runs.Turn) {
 	t.Request.Features = t.Request.Features.With(features.RAG, false)
+	if t.Request.Features.On(features.RAGCite) {
+		// rag.cite требует rag: без базы цитировать нечего, ведущий отвечает
+		// текстом.
+		t.Request.Features = t.Request.Features.With(features.RAGCite, false)
+	}
 	why := strings.TrimSpace(h.Why)
 	if why == "" {
 		why = "базы знаний нет"
@@ -179,7 +319,8 @@ func (h *Hook) off(t *runs.Turn) {
 		Detail: "Ход идёт без kb_search: ведущий отвечает по источникам хода (Википедия, GBIF).\nЧто сделать: " + hintNoKB + "."})
 }
 
-// After — ничего: выдача не проверяется и не пишется ходом (цитаты — v24).
+// After — ничего: ответ rag.cite проверяет kb_answer во время хода, а
+// принятый результат пишет в Extras сам Finisher (Hook.cite).
 func (h *Hook) After(ctx context.Context, t *runs.Turn) error { return nil }
 
 func join(a, b string) string {

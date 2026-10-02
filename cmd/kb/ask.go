@@ -18,7 +18,7 @@ func init() {
 
 func runAsk(ctx context.Context, args []string, out, errOut io.Writer) int {
 	fs := newFlagSet("ask", `[флаги] "вопрос"`, errOut)
-	mode := fs.String("mode", "both", "режимы через запятую: norag (без базы), rag (с базой), rag+filter, rag+rewrite, rag+both; both — norag и rag")
+	mode := fs.String("mode", "both", "режимы через запятую: norag (без базы), rag (с базой), rag+filter, rag+rewrite, rag+both, rag+cite (источники и цитаты); both — norag и rag")
 	var prior listFlag
 	fs.Var(&prior, "context", "предыдущая реплика пользователя (вопрос-продолжение); флаг можно повторять")
 	af := newAnswerFlags(fs)
@@ -77,6 +77,9 @@ func runAsk(ctx context.Context, args []string, out, errOut io.Writer) int {
 				if len(t.Anchored) > 0 {
 					anchor = "вид назван в запросе (" + strings.Join(t.Anchored, ", ") + ") — пол не применяется"
 				}
+				if len(t.Scope) > 0 {
+					anchor += "; рамка якоря — только статьи " + strings.Join(t.Scope, ", ") + " (и документы без вида)"
+				}
 				fmt.Fprintf(out, "Порог %.3f (%s); лучший косинус %.3f, отрыв %.3f; %s\n", t.MinScore, t.MinScoreFrom, t.TopDense, t.Gap, anchor)
 			}
 			line := fmt.Sprintf("Найдено (%s, %s", ans.Search.Index, ans.Search.Mode)
@@ -100,6 +103,9 @@ func runAsk(ctx context.Context, args []string, out, errOut io.Writer) int {
 			fmt.Fprintln(out)
 		}
 		fmt.Fprintln(out, ans.Text)
+		if ans.Cited != nil {
+			printCheck(out, ans)
+		}
 		fmt.Fprintf(out, "(%s; токены %d → %d, из кэша %d; %s; %d мс)\n", a.Model, ans.Usage.Prompt, ans.Usage.Completion,
 			ans.Usage.CacheHit, usd(ans.Cost), ans.Millis)
 	}
@@ -107,4 +113,36 @@ func runAsk(ctx context.Context, args []string, out, errOut io.Writer) int {
 		fmt.Fprintf(out, "\nИтого: %s\n", usd(total))
 	}
 	return exitOK
+}
+
+// printCheck — проверка kb_answer кодом (rag+cite): статус, «не знаю» по
+// решению кода, источники и цитаты, отказы, что не так.
+func printCheck(out io.Writer, ans rag.Answer) {
+	r := ans.Cited
+	ck := r.Check
+	line := "Проверка kb_answer: " + r.Cited.Status
+	switch {
+	case ck.Forced:
+		_, why := rag.Gate(ans.Trace, ans.Hits)
+		line += " — «не знаю» по решению кода: " + why
+	case r.Cited.Unknown():
+		line += " — «не знаю» по решению модели"
+	default:
+		line += fmt.Sprintf("; источников %d, цитат %d, дословных %d из %d", len(r.Cited.Sources), len(r.Cited.Quotes),
+			len(r.Cited.Quotes)-len(ck.NotVerbatim), len(r.Cited.Quotes))
+	}
+	line += fmt.Sprintf("; отказов проверки %d", ck.Rejects)
+	switch {
+	case ck.Unverified:
+		line += "; НЕ ПРОВЕРЕНО"
+	case ck.OK:
+		line += "; принят"
+	}
+	fmt.Fprintln(out, line)
+	for _, p := range ck.Problems {
+		fmt.Fprintln(out, "  - "+p)
+	}
+	if len(ck.NumbersMissing) > 0 {
+		fmt.Fprintln(out, "  числа ответа без цитаты: "+strings.Join(ck.NumbersMissing, ", "))
+	}
 }

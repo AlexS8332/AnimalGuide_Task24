@@ -407,20 +407,20 @@ func TestSlugs(t *testing.T) {
 
 func TestSelect(t *testing.T) {
 	all := Trials()
-	if len(all) != 11 {
+	if len(all) != 12 {
 		t.Fatalf("испытаний %d", len(all))
 	}
 	got, err := Select(all, "И-1, 6,i6")
 	if err != nil || len(got) != 2 || got[0].ID() != "И-1" || got[1].ID() != "И-6" {
 		t.Fatalf("выбор: %v", err)
 	}
-	if got, _ := Select(all, "all"); len(got) != 11 {
+	if got, _ := Select(all, "all"); len(got) != 12 {
 		t.Fatal("all")
 	}
-	if got, _ := Select(all, ""); len(got) != 11 {
+	if got, _ := Select(all, ""); len(got) != 12 {
 		t.Fatal("пусто — все")
 	}
-	if _, err := Select(all, "И-12"); err == nil {
+	if _, err := Select(all, "И-13"); err == nil {
 		t.Fatal("неизвестное испытание")
 	}
 	if _, err := Select(all, " , "); err == nil {

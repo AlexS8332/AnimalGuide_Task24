@@ -55,6 +55,24 @@ func (r Report) Markdown() string {
 			s.AnsweredUnanswerable, un, s.DiscriminativeCorrect, s.Discriminative, recall, agree, flips, s.Usage.Prompt+s.Usage.Completion, s.Usage.CacheHit, usd(s.Cost), s.AvgMillis)
 	}
 
+	if cited := r.citedStats(); len(cited) > 0 {
+		b.WriteString("\n## Источники и цитаты\n\n")
+		b.WriteString("Числа по прогонам: у каждого прогона свой kb_answer. Источники и цитаты считаются у ответов по существу (answered); " +
+			"дословность — доля цитат, найденных в своём фрагменте после нормализации; смысл — судья раскладывает ответ на утверждения " +
+			"и проверяет каждое по цитатам (только по ним, не по памяти).\n\n")
+		b.WriteString("| режим | kb_answer | по существу | «не знаю» | из них кодом | «не знаю» на отвечаемых | с источниками | с цитатами | дословных цитат | смысл подтверждён | не проверено | отказов проверки |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+		for _, s := range cited {
+			support := "—"
+			if s.SupportChecked > 0 {
+				support = fmt.Sprintf("%d из %d", s.Supported, s.SupportChecked)
+			}
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d из %d | %d из %d | %.0f %% | %s | %d | %d |\n",
+				s.Mode, s.Cited, s.Answered, s.Unknown, s.ForcedUnknown, s.FalseUnknown, s.WithSources, s.Answered,
+				s.WithQuotes, s.Answered, 100*s.Verbatim, support, s.Unverified, s.Rejects)
+		}
+	}
+
 	b.WriteString("\n## Вопросы\n\n")
 	b.WriteString("Вердикт — большинство повторов; в скобках — повторы по порядку. Источники — найденные `rag` фрагменты " +
 		"(✓ — из ожидаемого документа) против ожидаемых; «доказательство» — есть ли в выдаче фрагмент, покрывающий " +
@@ -109,6 +127,17 @@ func (r Report) Markdown() string {
 		b.WriteString("- " + d + "\n")
 	}
 	return b.String()
+}
+
+// citedStats — сводки режимов с kb_answer.
+func (r Report) citedStats() []ModeStats {
+	var out []ModeStats
+	for _, s := range r.Stats {
+		if s.Cited > 0 {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // modes — режимы отчёта в порядке сводки.
@@ -246,11 +275,54 @@ func runLine(r Run) string {
 	case r.JudgeError != "":
 		s += "; судья не ответил: " + r.JudgeError
 	}
+	if c := r.Answer.Cited; c != nil {
+		s += "; " + citeCell(*c, r.Answer.Support, r.SupportError)
+	}
 	if len(r.Answer.Hits) > 0 {
 		s += fmt.Sprintf("; фрагментов %d, поиск %s", len(r.Answer.Hits), r.Answer.Search.Mode)
 	}
 	s += fmt.Sprintf("; %d мс, %s", r.Answer.Millis, usd(r.Answer.Cost))
 	return s
+}
+
+// citeCell — проверка kb_answer одной строкой: статус, отказы,
+// дословность, смысл.
+func citeCell(c CitedResult, sp *Support, spErr string) string {
+	ck := c.Check
+	parts := []string{"kb_answer: " + status(c.Cited.Status)}
+	if ck.Forced {
+		parts = append(parts, "«не знаю» по решению кода")
+	}
+	if !c.Cited.Unknown() {
+		parts = append(parts, fmt.Sprintf("источников %d, цитат %d, дословных %d", len(c.Cited.Sources), len(c.Cited.Quotes),
+			len(c.Cited.Quotes)-len(ck.NotVerbatim)))
+	}
+	if ck.Rejects > 0 {
+		parts = append(parts, fmt.Sprintf("отказов проверки %d", ck.Rejects))
+	}
+	if ck.Unverified {
+		parts = append(parts, "НЕ ПРОВЕРЕНО: "+strings.Join(ck.Problems, "; "))
+	}
+	if len(ck.NumbersMissing) > 0 {
+		parts = append(parts, "чисел нет в цитатах: "+strings.Join(ck.NumbersMissing, ", "))
+	}
+	switch {
+	case sp != nil && !c.Cited.Unknown():
+		var bad []string
+		for _, cl := range sp.Claims {
+			if !cl.Supported {
+				bad = append(bad, "«"+cl.Claim+"»")
+			}
+		}
+		s := fmt.Sprintf("смысл: подтверждено %d из %d", sp.Supported, sp.Supported+sp.Unsupported)
+		if len(bad) > 0 {
+			s += " (нет в цитатах: " + strings.Join(bad, ", ") + ")"
+		}
+		parts = append(parts, s)
+	case spErr != "":
+		parts = append(parts, "судья смысла не ответил: "+spErr)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // cell — текст для ячейки таблицы: одной строкой, без «|»; n > 0 — обрезка.

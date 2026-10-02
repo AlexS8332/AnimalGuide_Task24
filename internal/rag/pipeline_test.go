@@ -20,7 +20,8 @@ func TestModeConfig(t *testing.T) {
 	cases := map[Mode]string{
 		RAGFilter:  "filter",
 		RAGRewrite: "rewrite code",
-		RAGBoth:    "rewrite code, filter",
+		RAGBoth:    "rewrite code, filter, scope",
+		RAGCite:    "rewrite code, filter, scope",
 		RAG:        "dense top-K1, без фильтра и переписывания",
 		NoRAG:      "dense top-K1, без фильтра и переписывания",
 	}

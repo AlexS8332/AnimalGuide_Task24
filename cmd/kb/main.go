@@ -16,6 +16,7 @@
 //	kb calibrate -out examples/rag/calibrate.md  # порог релевантности на dev+out (в индекс — с -write)
 //	kb matrix -k1 3,5,8 -rrf          # режимы base/filter/rewrite/both/hybrid → examples/rag/filter.md
 //	kb qa -modes rag,rag+both         # ответы с конвейером поиска v23
+//	kb qa -modes rag+both,rag+cite -splits test,out  # источники, цитаты и «не знаю» (v24)
 //	kb help [команда]                 # список команд или справка по одной
 //
 // Подкоманды регистрируются в своих файлах (cmd/kb/<команда>.go) вызовом
