@@ -123,10 +123,13 @@ func printCheck(out io.Writer, ans rag.Answer) {
 	line := "Проверка kb_answer: " + r.Cited.Status
 	switch {
 	case ck.Forced:
-		_, why := rag.Gate(ans.Trace, ans.Hits)
+		why := ck.GateReason
+		if why == "" {
+			_, why = rag.Gate(ans.Trace, ans.Hits)
+		}
 		line += " — «не знаю» по решению кода: " + why
 	case r.Cited.Unknown():
-		line += " — «не знаю» по решению модели"
+		line += fmt.Sprintf(" — «не знаю» по решению модели; ближайшее в базе — источников %d", len(r.Cited.Sources))
 	default:
 		line += fmt.Sprintf("; источников %d, цитат %d, дословных %d из %d", len(r.Cited.Sources), len(r.Cited.Quotes),
 			len(r.Cited.Quotes)-len(ck.NotVerbatim), len(r.Cited.Quotes))
@@ -144,5 +147,8 @@ func printCheck(out io.Writer, ans rag.Answer) {
 	}
 	if len(ck.NumbersMissing) > 0 {
 		fmt.Fprintln(out, "  числа ответа без цитаты: "+strings.Join(ck.NumbersMissing, ", "))
+	}
+	if len(ck.SpeciesMismatch) > 0 {
+		fmt.Fprintln(out, "  вид в ответе без цитаты из своей статьи: "+strings.Join(ck.SpeciesMismatch, ", "))
 	}
 }

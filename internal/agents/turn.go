@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -73,6 +74,11 @@ type Request struct {
 	// (Spec.AllowText = false), и текст ответа берётся из принятого
 	// результата (интерфейс Texter), а не из сообщения модели.
 	Finish []agent.Finisher `json:"-"`
+	// FinishFail — ответ человеку, если ход с Finish оборвался без принятого
+	// результата (ошибка протокола — модель отвечала текстом; предел шагов):
+	// вместо «ход не удался» — ответ механизма (у rag.cite — «не знаю» с
+	// пометкой «не проверено»). nil — ошибка хода как раньше.
+	FinishFail func(err error) Texter `json:"-"`
 }
 
 // Texter — результат завершающего инструмента, который сам знает свой
@@ -432,11 +438,17 @@ func briefCard(c card.Card, secs []card.Section) map[string]any {
 
 // lead — ведущий диалога.
 func (t *turn) lead(ctx context.Context, req Request) (agent.Reply, error) {
-	src, err := sourcePick(t.reg, tools.SourceTools...)
-	if err != nil {
-		return agent.Reply{}, err
+	// Ход с завершающим инструментом (rag.cite) отвечает только по его
+	// инструментам: карточки и источники (Википедия, GBIF) ответ не
+	// подтвердят — kb_answer цитирует только выдачу kb_search.
+	var list []tools.Tool
+	if len(req.Finish) == 0 {
+		src, err := sourcePick(t.reg, tools.SourceTools...)
+		if err != nil {
+			return agent.Reply{}, err
+		}
+		list = append(t.leadTools(ctx), src...)
 	}
-	list := append(t.leadTools(ctx), src...)
 	list = append(list, req.Tools...)
 	spec := agent.Spec{Name: "lead", System: req.System(leadSystem), Tools: list, MaxSteps: leadMaxSteps}
 	if len(req.Finish) > 0 {
@@ -450,6 +462,12 @@ func (t *turn) lead(ctx context.Context, req Request) (agent.Reply, error) {
 	// текст принятого результата.
 	if tx, ok := reply.Final.(Texter); ok && err == nil {
 		reply.Text = tx.Text()
+	}
+	if err != nil && len(req.Finish) > 0 && req.FinishFail != nil &&
+		(errors.Is(err, agent.ErrProtocol) || errors.Is(err, agent.ErrStepLimit)) {
+		if tx := req.FinishFail(err); tx != nil {
+			reply.Text, reply.Added, err = tx.Text(), nil, nil
+		}
 	}
 	return reply, err
 }

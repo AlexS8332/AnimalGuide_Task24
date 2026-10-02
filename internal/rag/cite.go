@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/agent"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/corpus"
@@ -111,6 +114,20 @@ type CiteCheck struct {
 	// NumbersMissing — числа ответа, которых нет ни в одной цитате (мягкая
 	// проверка: первый раз — отказ с подсказкой, второй — только метрика).
 	NumbersMissing []string `json:"numbers_missing,omitempty"`
+	// SpeciesMismatch — виды, названные в ответе, у которых ни одна цитата
+	// не из статьи о них (и не из обзорной статьи или MDD, где вид назван в
+	// самой цитате): «сколько весит харза» с цитатой из статьи о соболе.
+	// Мягкая метрика: отказа нет — ответ о двух видах с цитатой об одном
+	// бывает честным («о соболе в базе нет»).
+	SpeciesMismatch []string `json:"species_mismatch,omitempty"`
+	// Gated, GateReason — код решил «только unknown» в момент приёма ответа
+	// (Gate по выдаче хода) и почему.
+	Gated      bool   `json:"gated,omitempty"`
+	GateReason string `json:"gate_reason,omitempty"`
+	// Relevant — сколько фрагментов было в релевантной выдаче хода (не
+	// отсечённой Gate): у unknown из неё берётся «ближайшее в базе»; 0 —
+	// «не знаю» без источников (ниже порога или ничего не найдено).
+	Relevant int `json:"relevant"`
 	// Problems — что не так словами (для отказа модели и для окна).
 	Problems []string `json:"problems,omitempty"`
 	Rejects  int      `json:"rejects"`
@@ -119,18 +136,37 @@ type CiteCheck struct {
 // status — статус как его понимает код: регистр и пробелы не в счёт.
 func status(s string) string { return strings.ToLower(strings.TrimSpace(s)) }
 
+// CheckOptions — что Check знает сверх ответа и выдачи.
+type CheckOptions struct {
+	// StrictNumbers — числа без цитаты дают проблему (первая попытка), иначе
+	// — только метрику NumbersMissing.
+	StrictNumbers bool
+	// Question — вопрос (в чате — реплика хода): его числа в цитатах не нужны
+	// («сколько манулов осталось в 2020 году» — 2020 взято из вопроса).
+	Question string
+	// Names — словарь названий для метрики SpeciesMismatch; nil — без неё.
+	Names *retrieve.Aliases
+}
+
 // Check проверяет ответ против выдачи хода. strictNumbers — числа без
 // цитаты дают отказ (первая попытка) или только пометку (повторные).
+func Check(c Cited, hits []kb.Hit, strictNumbers bool) CiteCheck {
+	return CheckWith(c, hits, CheckOptions{StrictNumbers: strictNumbers})
+}
+
+// CheckWith — Check с вопросом и словарём названий.
 //
 // answered: хотя бы один источник и одна цитата; каждый chunk_id (и в
-// sources, и в quotes) — из выдачи; каждая цитата — после corpus.Normalize
-// подстрока текста своего фрагмента и не короче MinQuote символов;
-// многоточие внутри цитаты («…» или «...») — пропуск: каждая часть ищется
-// отдельно. Числа ответа (тот же разбор, что у Rule: «2,5» = «2.5», «5
-// тысяч» = «5 000», числа словами) должны стоять в цитатах. unknown:
-// непустой Clarify, источники и цитаты не обязательны и не проверяются.
-// Неизвестный статус — проблема.
-func Check(c Cited, hits []kb.Hit, strictNumbers bool) CiteCheck {
+// sources, и в quotes) — из выдачи; каждая цитата — после нормализации
+// (quoteNorm) подстрока текста своего фрагмента и не короче MinQuote
+// символов; многоточие внутри цитаты («…», «...», «[…]») — пропуск: части
+// ищутся по порядку, пропуск короткий и без отрицаний (quoteProblem). Числа
+// ответа (тот же разбор, что у Rule: «2,5» = «2.5», «5 тысяч» = «5 000»,
+// числа словами) должны стоять в цитатах, кроме чисел вопроса и версий
+// («MDD v2.5»). unknown: непустой Clarify, источники и цитаты не
+// обязательны и не проверяются. Неизвестный статус — проблема.
+func CheckWith(c Cited, hits []kb.Hit, o CheckOptions) CiteCheck {
+	strictNumbers := o.StrictNumbers
 	byID := make(map[string]kb.Hit, len(hits))
 	var ids []string
 	for _, h := range hits {
@@ -214,7 +250,8 @@ func Check(c Cited, hits []kb.Hit, strictNumbers bool) CiteCheck {
 		problem("chunk_id %s не выдавались в этом ходе; источники и цитаты — только из выдачи: %s",
 			strings.Join(ck.UnknownIDs, ", "), strings.Join(ids, ", "))
 	}
-	ck.NumbersMissing = numbersMissing(c)
+	ck.NumbersMissing = numbersMissing(c, o.Question)
+	ck.SpeciesMismatch = speciesMismatch(c, byID, o.Names)
 	if strictNumbers && len(ck.NumbersMissing) > 0 {
 		problem("чисел ответа %s нет ни в одной цитате: добавь цитату, где они стоят, или убери их из ответа; "+
 			"если число взято из вопроса или вычислено из цитат (разница, сумма) — повтори вызов без изменений",
@@ -228,14 +265,43 @@ func Check(c Cited, hits []kb.Hit, strictNumbers bool) CiteCheck {
 // в скобках («[…]», «(...)»).
 var ellipsis = regexp.MustCompile(`[\[(]?(?:…|\.{3,})[\])]?`)
 
+// dashSpace — пробелы вокруг дефиса и тире (после corpus.Normalize все тире
+// — «-»): «2,5 – 5,8» и «2,5—5,8» — одно и то же, модель расставляет
+// пробелы вокруг тире по-своему.
+var dashSpace = regexp.MustCompile(` ?- ?`)
+
+// quoteNorm — нормализация цитаты и фрагмента для сверки: corpus.Normalize
+// (регистр, ё, кавычки, тире, пробелы) и пробелы вокруг тире схлопнуты.
+// Своя, а не в corpus.Normalize: та же нормализация служит Find, ключам
+// словаря названий и разметке доказательств, и менять их ради цитат незачем.
+func quoteNorm(s string) string { return dashSpace.ReplaceAllString(corpus.Normalize(s), "-") }
+
+// maxQuoteGap — самый длинный пропуск «…» в цитате (символов фрагмента
+// между частями): длиннее — это уже склейка разных мест фрагмента, а не
+// сокращение одной фразы.
+const maxQuoteGap = 200
+
+// negations — слова, пропуск которых меняет смысл: «Харза … опасна для
+// человека» из «Харза не опасна для человека».
+var negations = map[string]bool{"не": true, "нет": true, "ни": true, "без": true, "нельзя": true}
+
+// gapProblem — отказ за пропуск, меняющий смысл.
+const gapProblem = "пропуск в цитате меняет смысл: процитируй без «…»"
+
 // quoteProblem — почему цитата не дословна (пусто — дословна).
+//
+// Части цитаты с пропуском ищутся ПО ПОРЯДКУ: каждая — после конца
+// предыдущей, пропуск между ними не длиннее maxQuoteGap символов и без
+// отрицаний (negations). Иначе «самок … при массе в 2,5—5,8 кг» сшивалось
+// бы из «самцов … при массе в 2,5—5,8 кг, самок — …» в обратном порядке, а
+// «Харза … опасна» — из «Харза не опасна».
 func quoteProblem(quote, chunk string) string {
 	parts := ellipsis.Split(quote, -1)
-	norm := corpus.Normalize(chunk)
+	norm := quoteNorm(chunk)
 	total := 0
 	var kept []string
 	for _, p := range parts {
-		p = strings.Trim(corpus.Normalize(p), " .,;:")
+		p = strings.Trim(quoteNorm(p), " .,;:")
 		if p == "" {
 			continue
 		}
@@ -257,22 +323,73 @@ func quoteProblem(quote, chunk string) string {
 				clip(p, 80))
 		}
 	}
+	if len(kept) > 1 && !placeParts(norm, kept, 0, -1) {
+		return gapProblem
+	}
 	return ""
+}
+
+// placeParts — части parts[i:] стоят в norm по порядку, начиная после
+// байта from (-1 — первая часть где угодно), с допустимыми пропусками.
+// Перебор вхождений, а не первое: «харза» встречается во фрагменте не раз, и
+// годное место может быть у второго вхождения.
+func placeParts(norm string, parts []string, i, from int) bool {
+	if i == len(parts) {
+		return true
+	}
+	start := max(from, 0)
+	for {
+		at := strings.Index(norm[start:], parts[i])
+		if at < 0 {
+			return false
+		}
+		at += start
+		ok := true
+		if from >= 0 {
+			gap := norm[from:at]
+			if utf8.RuneCountInString(gap) > maxQuoteGap {
+				return false // дальше пропуск только длиннее
+			}
+			ok = !negated(gap)
+		}
+		if ok && placeParts(norm, parts, i+1, at+len(parts[i])) {
+			return true
+		}
+		_, size := utf8.DecodeRuneInString(norm[at:])
+		start = at + size
+	}
+}
+
+// negated — в пропуске есть отрицание.
+func negated(gap string) bool {
+	for _, w := range strings.FieldsFunc(gap, func(r rune) bool { return !unicode.IsLetter(r) }) {
+		if negations[w] {
+			return true
+		}
+	}
+	return false
 }
 
 // refMark — ссылка «[1]», «[2, 3]» в тексте ответа: не число ответа.
 var refMark = regexp.MustCompile(`\[\d+(?:\s*[,;]\s*\d+)*\]`)
 
+// version — версия («MDD v2.5», «v24»): не число ответа.
+var version = regexp.MustCompile(`(?i)\bv\d+(?:[.,]\d+)*`)
+
 // numbersMissing — числа ответа, которых нет в цитатах (разбор — как у
-// Rule: parse). Единица не в счёт («один из…», «1 вид» — шум, как у
-// hasNumbers).
-func numbersMissing(c Cited) []string {
-	a := parse(refMark.ReplaceAllString(c.Answer, " "))
+// Rule: parse). Не в счёт: единица («один из…», «1 вид» — шум, как у
+// hasNumbers), версии и числа самого вопроса («в 2020 году» из вопроса
+// повторено в ответе — опора у него в вопросе, а не в цитате).
+func numbersMissing(c Cited, question string) []string {
+	a := parse(version.ReplaceAllString(refMark.ReplaceAllString(c.Answer, " "), " "))
 	var texts []string
 	for _, q := range c.Quotes {
 		texts = append(texts, q.Text)
 	}
 	have := parse(strings.Join(texts, "\n")).values
+	if q := strings.TrimSpace(question); q != "" {
+		have = append(have, parse(version.ReplaceAllString(q, " ")).values...)
+	}
 	var out []string
 	seen := map[float64]bool{}
 	for _, v := range a.values {
@@ -294,6 +411,43 @@ func numbersMissing(c Cited) []string {
 	return out
 }
 
+// speciesMismatch — виды ответа без цитаты из своей статьи (SpeciesMismatch).
+// Вид подтверждён, если хотя бы одна цитата — из статьи о нём или из статьи
+// не о виде (обзорная, MDD), где он назван в самой цитате. Ответ без цитат
+// из выдачи — пусто: там и так провал Check.
+func speciesMismatch(c Cited, byID map[string]kb.Hit, al *retrieve.Aliases) []string {
+	if al == nil || len(al.Docs) == 0 {
+		return nil
+	}
+	speciesDoc := make(map[string]bool, len(al.Docs))
+	for _, d := range al.Docs {
+		speciesDoc[d] = true
+	}
+	var out []string
+	for _, sp := range al.Species(c.Answer) {
+		doc, ok := al.Docs[sp]
+		if !ok {
+			continue
+		}
+		quoted, have := false, false
+		for _, q := range c.Quotes {
+			h, ok := byID[strings.TrimSpace(q.ChunkID)]
+			if !ok {
+				continue
+			}
+			quoted = true
+			if h.DocID == doc || (!speciesDoc[h.DocID] && slices.Contains(al.Species(q.Text), sp)) {
+				have = true
+				break
+			}
+		}
+		if quoted && !have {
+			out = append(out, sp)
+		}
+	}
+	return out
+}
+
 // Gate — решение «не знаю» кодом по трассе конвейера: true, если выдача
 // пуста (фильтр отсёк всё) или трасса говорит о слабом контексте. Причина —
 // для журнала и окна.
@@ -306,6 +460,11 @@ func numbersMissing(c Cited) []string {
 // 0.843–0.910, отрыв 0.002–0.065). Порог по ним отсекал бы отвечаемые
 // вопросы, и «не знаю» там решает модель (status unknown) — по фрагментам,
 // которые она видит.
+//
+// Без фильтра (механизм rag без rag.filter: выдача — первые k по косинусу,
+// трасса — только для Gate, см. Hook) правило то же, что у фильтра, без
+// самого фильтра: вид в вопросе не назван и лучший косинус ниже порога
+// индекса (retrieve.MinScoreOf) — «не знаю»; вид назван — решает модель.
 func Gate(tr *retrieve.Trace, hits []kb.Hit) (unknown bool, reason string) {
 	switch {
 	case tr != nil && tr.Empty && tr.Config.Filter && tr.Info.Mode == kb.Dense && len(tr.Candidates) > 0:
@@ -314,6 +473,8 @@ func Gate(tr *retrieve.Trace, hits []kb.Hit) (unknown bool, reason string) {
 		return true, "фильтр релевантности отсёк все фрагменты"
 	case len(hits) == 0:
 		return true, "в базе знаний по вопросу ничего не найдено"
+	case tr != nil && !tr.Config.Filter && tr.Info.Mode == kb.Dense && len(tr.Anchored) == 0 && tr.MinScore > 0 && tr.TopDense < tr.MinScore:
+		return true, fmt.Sprintf("вид в вопросе не назван, а лучший косинус %.3f ниже порога %.3f", tr.TopDense, tr.MinScore)
 	}
 	return false, ""
 }
@@ -334,7 +495,7 @@ func FinishSchema(onlyUnknown bool) json.RawMessage {
   "properties": {
     "status": {"type": "string", "enum": ` + enum + `, "description": "` + statusDesc + `"},
     "answer": {"type": "string", "description": "Ответ кратко, без ссылок [chunk_id]; при unknown — чего именно нет в базе знаний"},
-    "sources": {"type": "array", "description": "Фрагменты, на которых держится ответ (только из выдачи этого хода)",
+    "sources": {"type": "array", "description": "Фрагменты, на которых держится ответ (только из выдачи этого хода); при unknown — 1–3 ближайших найденных",
       "items": {"type": "object", "properties": {"chunk_id": {"type": "string"}}, "required": ["chunk_id"]}},
     "quotes": {"type": "array", "description": "Дословные цитаты из фрагментов, подтверждающие ответ",
       "items": {"type": "object", "properties": {
@@ -373,53 +534,116 @@ const onlyUnknownProblem = "контекст слабый: ответь unknown 
 // MaxRejects): человек всё равно получает вопрос, а не обрыв.
 const defaultClarify = "Уточните, пожалуйста, вопрос: о каком животном и о чём именно идёт речь?"
 
-// Finisher — завершающий инструмент kb_answer для agent.Runner (чат и
-// Answerer): Handle проверяет Check, считает отказы и на MaxRejects
+// FinishOptions — что завершающий инструмент знает о ходе.
+type FinishOptions struct {
+	// Hits — вся выдача хода в момент вызова (в чате — всё, что вернул
+	// kb_search этого хода, кодом и моделью): по ней проверяется, что
+	// chunk_id выдавался.
+	Hits func() []kb.Hit
+	// Gate — решение «только unknown» в момент вызова (в чате — по ВСЕМ
+	// вызовам kb_search хода) и релевантная выдача, из которой у unknown
+	// берётся «ближайшее в базе». nil — «только unknown» при пустой Hits,
+	// релевантная выдача — Hits.
+	Gate func() (only bool, why string, relevant []kb.Hit)
+	// OnlyUnknown, Why — решение, известное до хода (Answerer: выдача одна и
+	// посчитана до запроса к модели): схема kb_answer ограничена unknown —
+	// запрет отсутствием варианта (ИП-7).
+	OnlyUnknown bool
+	Why         string
+	// Question — вопрос: его числа в цитатах не нужны (CheckOptions).
+	Question string
+	// Names — словарь названий для метрики SpeciesMismatch; nil — без неё.
+	Names *retrieve.Aliases
+}
+
+// maxNearest — сколько «ближайших в базе» источников у «не знаю».
+const maxNearest = 3
+
+// Finisher — kb_answer с решением «только unknown», известным до хода
+// (FinisherOf с OnlyUnknown и Why).
+func Finisher(hits func() []kb.Hit, onlyUnknown bool, gateReason string) agent.Finisher {
+	return FinisherOf(FinishOptions{Hits: hits, OnlyUnknown: onlyUnknown, Why: gateReason})
+}
+
+// FinisherOf — завершающий инструмент kb_answer для agent.Runner (чат и
+// Answerer): Handle проверяет CheckWith, считает отказы и на MaxRejects
 // принимает с Unverified. Результат Handle — *CitedResult (Texter для
 // agents.lead).
 //
-// hits — выдача хода на момент вызова (в чате — всё, что вернул kb_search
-// этого хода, кодом и моделью). Пустая выдача — тоже «только unknown»,
-// даже если схема разрешает answered: цитировать нечего.
+// «Только unknown» решается в момент вызова (Gate) или известно заранее
+// (OnlyUnknown); пустая выдача — тоже «только unknown», даже если схема
+// разрешает answered: цитировать нечего.
 //
 // Отказы: answered при «только unknown» — «контекст слабый…»; провал Check
-// — список Problems. Каждый отказ — ошибка Handle (уходит модели, цикл
-// продолжается); после MaxRejects отказов ответ принимается: answered — с
-// Unverified, а answered при «только unknown» превращается в unknown с
-// пометками Forced и Unverified (ответ мимо фрагментов человеку не
-// показывается). Числа без цитаты дают отказ только один раз: дальше —
-// метрика NumbersMissing.
-func Finisher(hits func() []kb.Hit, onlyUnknown bool, gateReason string) agent.Finisher {
+// — список Problems; битые аргументы. Каждый отказ — ошибка Handle (уходит
+// модели, цикл продолжается); после MaxRejects отказов ответ принимается:
+// answered — с Unverified, answered при «только unknown» и неразбираемые
+// аргументы — unknown с пометкой Unverified (ответ мимо фрагментов человеку
+// не показывается). Числа без цитаты дают отказ только один раз и в
+// MaxRejects не идут, если других проблем нет: дальше — метрика
+// NumbersMissing.
+//
+// У принятого unknown — «ближайшее в базе»: источники модели из релевантной
+// выдачи, а если их нет — первые maxNearest её фрагментов; релевантная
+// выдача пуста (Gate) — источников нет.
+func FinisherOf(o FinishOptions) agent.Finisher {
 	var mu sync.Mutex
 	rejects, numbersRejected := 0, false
 	return agent.Finisher{
 		Name:        FinishName,
-		Description: finishDescription(onlyUnknown, gateReason),
-		Parameters:  FinishSchema(onlyUnknown),
+		Description: finishDescription(o.OnlyUnknown, o.Why),
+		Parameters:  FinishSchema(o.OnlyUnknown),
 		Handle: func(ctx context.Context, callID string, args json.RawMessage) (any, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			var hs []kb.Hit
-			if hits != nil {
-				hs = hits()
+			if o.Hits != nil {
+				hs = o.Hits()
 			}
-			var c Cited
-			if err := json.Unmarshal(args, &c); err != nil {
-				rejects++
-				return nil, fmt.Errorf("аргументы kb_answer не разобраны (%v): передай JSON {status, answer, sources, quotes, clarify}", err)
+			gated, why, rel := o.OnlyUnknown, o.Why, hs
+			switch {
+			case o.OnlyUnknown:
+				rel = nil
+			case o.Gate != nil:
+				gated, why, rel = o.Gate()
 			}
-			c.Status = status(c.Status)
-			gated := onlyUnknown || len(hs) == 0
+			if len(hs) == 0 && !gated {
+				gated, why = true, "в выдаче нет фрагментов"
+			}
+			if gated {
+				why = orText(why, "в выдаче нет фрагментов")
+			}
 			reject := func(problems ...string) error {
 				rejects++
 				return fmt.Errorf("ответ не принят: %s", strings.Join(problems, "; "))
 			}
+			var c Cited
 			accept := func(ck CiteCheck) (any, error) {
-				ck.Rejects = rejects
+				ck.Rejects, ck.Gated, ck.Relevant = rejects, gated, len(rel)
+				if gated {
+					ck.GateReason = why
+				}
+				if c.Unknown() {
+					c.Sources = nearest(c.Sources, rel)
+					ck.HasSources = len(c.Sources) > 0
+					ck.Forced = gated
+				}
 				return &CitedResult{Cited: c, Check: ck, Hits: hs}, nil
 			}
+			if err := json.Unmarshal(args, &c); err != nil {
+				problem := fmt.Sprintf("аргументы kb_answer не разобраны (%v): передай JSON {status, answer, sources, quotes, clarify}", err)
+				if rejects < MaxRejects {
+					rejects++
+					return nil, errors.New(problem)
+				}
+				c = Cited{Status: StatusUnknown, Answer: unverifiedAnswer, Clarify: defaultClarify}
+				ck := Check(c, hs, false)
+				ck.Unverified = true
+				ck.Problems = append(ck.Problems, problem)
+				return accept(ck)
+			}
+			c.Status = status(c.Status)
 			if gated && c.Status == StatusAnswered {
-				why := orText(gateReason, "в выдаче нет фрагментов")
 				if rejects < MaxRejects {
 					return nil, reject(onlyUnknownProblem + " (" + why + ")")
 				}
@@ -427,19 +651,27 @@ func Finisher(hits func() []kb.Hit, onlyUnknown bool, gateReason string) agent.F
 				// уходит — код сам делает его «не знаю».
 				c = Cited{Status: StatusUnknown, Clarify: orText(c.Clarify, defaultClarify)}
 				ck := Check(c, hs, false)
-				ck.Forced, ck.Unverified = true, true
+				ck.Unverified = true
 				ck.Problems = append(ck.Problems, onlyUnknownProblem+" — модель ответила по существу, ответ заменён на «не знаю»")
 				return accept(ck)
 			}
-			ck := Check(c, hs, !numbersRejected)
-			ck.Forced = gated && c.Status == StatusUnknown
+			co := CheckOptions{StrictNumbers: !numbersRejected, Question: o.Question, Names: o.Names}
+			ck := CheckWith(c, hs, co)
 			if ck.OK {
 				return accept(ck)
 			}
-			if rejects < MaxRejects {
-				if len(ck.NumbersMissing) > 0 {
-					numbersRejected = true
+			if len(ck.NumbersMissing) > 0 && co.StrictNumbers {
+				numbersRejected = true
+				soft := co
+				soft.StrictNumbers = false
+				if CheckWith(c, hs, soft).OK {
+					// Только числа: подсказка один раз и не в счёт отказов —
+					// число могло быть вычислено из цитат, и модель вправе
+					// повторить вызов без изменений.
+					return nil, fmt.Errorf("ответ не принят: %s", strings.Join(ck.Problems, "; "))
 				}
+			}
+			if rejects < MaxRejects {
 				return nil, reject(ck.Problems...)
 			}
 			ck.Unverified = true
@@ -449,6 +681,54 @@ func Finisher(hits func() []kb.Hit, onlyUnknown bool, gateReason string) agent.F
 			return accept(ck)
 		},
 	}
+}
+
+// unverifiedAnswer — «не знаю», когда проверенного ответа не получилось
+// (аргументы kb_answer так и не разобраны, ход ведущего оборвался).
+const unverifiedAnswer = "не удалось получить проверенный ответ из базы знаний"
+
+// nearest — источники «не знаю»: источники модели, которые есть в
+// релевантной выдаче (без повторов, не больше maxNearest), а если таких
+// нет — первые maxNearest фрагментов выдачи. Пустая выдача — без источников.
+func nearest(sources []CitedSource, rel []kb.Hit) []CitedSource {
+	if len(rel) == 0 {
+		return nil
+	}
+	in := make(map[string]bool, len(rel))
+	for _, h := range rel {
+		in[h.ID] = true
+	}
+	var out []CitedSource
+	seen := map[string]bool{}
+	for _, s := range sources {
+		id := strings.TrimSpace(s.ChunkID)
+		if in[id] && !seen[id] && len(out) < maxNearest {
+			seen[id] = true
+			out = append(out, CitedSource{ChunkID: id})
+		}
+	}
+	if len(out) > 0 {
+		return out
+	}
+	for _, h := range rel[:min(maxNearest, len(rel))] {
+		out = append(out, CitedSource{ChunkID: h.ID})
+	}
+	return out
+}
+
+// UnverifiedResult — «не знаю» с пометкой «не проверено», когда ход
+// ведущего с kb_answer оборвался (модель так и не вызвала его — ошибка
+// протокола или предел шагов): человек получает честное «не знаю» с
+// ближайшим найденным, а не «ход не удался». rel — релевантная выдача хода.
+func UnverifiedResult(cause error, hits, rel []kb.Hit) *CitedResult {
+	c := Cited{Status: StatusUnknown, Answer: unverifiedAnswer, Clarify: defaultClarify}
+	c.Sources = nearest(nil, rel)
+	ck := Check(c, hits, false)
+	ck.Unverified, ck.Relevant, ck.HasSources = true, len(rel), len(c.Sources) > 0
+	if cause != nil {
+		ck.Problems = append(ck.Problems, cause.Error())
+	}
+	return &CitedResult{Cited: c, Check: ck, Hits: hits}
 }
 
 // CitedResult — принятый ответ: аргументы, проверка, выдача (для заголовков
@@ -504,14 +784,11 @@ func unknownLine(c Cited) string {
 // render — ответ человеку в markdown. Источники нумеруются по порядку
 // sources, затем — фрагменты цитат, которых в sources нет; заголовок
 // источника — «Статья › Раздел» из выдачи (без выдачи — только chunk_id).
+//
+// У «не знаю» — «Не знаю: …», «Уточните: …» и, если выдача была,
+// «**Ближайшее в базе:**» тем же списком, что источники (без цитат):
+// человек видит, что в базе нашлось рядом с вопросом.
 func render(c Cited, hits []kb.Hit) string {
-	if c.Unknown() {
-		s := unknownLine(c)
-		if q := strings.TrimSpace(c.Clarify); q != "" {
-			s += "\n\nУточните: " + q
-		}
-		return s
-	}
 	byID := map[string]kb.Hit{}
 	for _, h := range hits {
 		byID[h.ID] = h
@@ -526,24 +803,39 @@ func render(c Cited, hits []kb.Hit) string {
 		order = append(order, id)
 		num[id] = len(order)
 	}
+	sourceList := func(b *strings.Builder, head string) {
+		if len(order) == 0 {
+			return
+		}
+		b.WriteString("\n\n**" + head + ":**")
+		for _, id := range order {
+			if h, ok := byID[id]; ok {
+				fmt.Fprintf(b, "\n[%d] %s › %s (`%s`)", num[id], h.Title, pathOf(h.Chunk), id)
+			} else {
+				fmt.Fprintf(b, "\n[%d] `%s`", num[id], id)
+			}
+		}
+	}
+	var b strings.Builder
+	if c.Unknown() {
+		b.WriteString(unknownLine(c))
+		if q := strings.TrimSpace(c.Clarify); q != "" {
+			b.WriteString("\n\nУточните: " + q)
+		}
+		for _, s := range c.Sources {
+			add(s.ChunkID)
+		}
+		sourceList(&b, "Ближайшее в базе")
+		return b.String()
+	}
 	for _, s := range c.Sources {
 		add(s.ChunkID)
 	}
 	for _, q := range c.Quotes {
 		add(q.ChunkID)
 	}
-	var b strings.Builder
 	b.WriteString(strings.TrimSpace(c.Answer))
-	if len(order) > 0 {
-		b.WriteString("\n\n**Источники:**")
-		for _, id := range order {
-			if h, ok := byID[id]; ok {
-				fmt.Fprintf(&b, "\n[%d] %s › %s (`%s`)", num[id], h.Title, pathOf(h.Chunk), id)
-			} else {
-				fmt.Fprintf(&b, "\n[%d] `%s`", num[id], id)
-			}
-		}
-	}
+	sourceList(&b, "Источники")
 	var quotes []string
 	for _, q := range c.Quotes {
 		t := strings.Join(strings.Fields(q.Text), " ")
@@ -599,6 +891,7 @@ const supportSystem = `Ты — строгий проверяющий: реша�
 Разложи ответ на утверждения — факты и числа по существу: кто, что, сколько, когда, где. Связки, вводные слова, повтор вопроса и оговорки («по данным источника», «в неволе» как уточнение) отдельными утверждениями не считай. Число — утверждение вместе с тем, к чему оно относится («самцы харзы весят 2,5–5,8 кг»).
 
 Утверждение подтверждено (supported: true), если хотя бы одна цитата говорит то же самое: другие слова, падеж, округление и единицы, не меняющие смысла, допустимы; простой вывод из цитат (сравнение двух чисел, разница, сумма) допустим, если все исходные числа есть в цитатах. Не подтверждено (supported: false), если в цитатах этого нет, цитаты говорят другое или утверждение сильнее цитаты (в цитате «до 9 м», в ответе «обычно 9 м»; в цитате — о подвиде, в ответе — о виде).
+У каждой цитаты в скобках — статья и раздел, откуда она взята. Утверждение о виде X подтверждается только цитатой из статьи о виде X или из обзорной статьи (о семействе, отряде) и справочника MDD, если X назван в самой цитате: цитата из статьи о соболе не подтверждает утверждение о харзе, даже если числа совпали.
 
 Ответь строго одним JSON-объектом без текста вокруг:
 {"claims": [{"claim": "утверждение кратко", "supported": true, "quote": 1, "reason": "почему — одной фразой"}]}
@@ -607,8 +900,15 @@ quote — номер подтверждающей цитаты; 0 — такой
 // SupportSystem — системный промпт судьи смысла (для отчёта и тестов).
 func SupportSystem() string { return supportSystem }
 
-// supportUser — вход судьи смысла: ответ (через Blind) и цитаты по номерам.
-func supportUser(c Cited) string {
+// supportUser — вход судьи смысла: ответ (через Blind) и цитаты по номерам
+// со статьёй и разделом из выдачи — «[1] (Харза › Описание) «…»»: без них
+// судья не отличил бы цитату о соболе от цитаты о харзе. Цитата фрагмента,
+// которого в выдаче нет, — без скобок.
+func supportUser(c Cited, hits []kb.Hit) string {
+	byID := make(map[string]kb.Hit, len(hits))
+	for _, h := range hits {
+		byID[h.ID] = h
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Ответ:\n<<<\n%s\n>>>\n\nЦитаты:\n", Blind(c.Answer))
 	n := 0
@@ -618,6 +918,10 @@ func supportUser(c Cited) string {
 			continue
 		}
 		n++
+		if h, ok := byID[strings.TrimSpace(q.ChunkID)]; ok {
+			fmt.Fprintf(&b, "[%d] (%s › %s) «%s»\n", n, h.Title, pathOf(h.Chunk), t)
+			continue
+		}
 		fmt.Fprintf(&b, "[%d] «%s»\n", n, t)
 	}
 	if n == 0 {
@@ -631,6 +935,12 @@ func supportUser(c Cited) string {
 // это в цитатах». «Не знаю» — OK без запроса: утверждений по существу в нём
 // нет.
 func (j *Judge) CheckSupport(ctx context.Context, c Cited) (Support, error) {
+	return j.CheckSupportOf(ctx, c, nil)
+}
+
+// CheckSupportOf — CheckSupport с выдачей хода: у цитат — статья и раздел
+// (supportUser).
+func (j *Judge) CheckSupportOf(ctx context.Context, c Cited, hits []kb.Hit) (Support, error) {
 	if c.Unknown() {
 		return Support{OK: true}, nil
 	}
@@ -643,7 +953,7 @@ func (j *Judge) CheckSupport(ctx context.Context, c Cited) (Support, error) {
 	}
 	resp, err := j.LLM.Chat(ctx, llm.Request{Model: model, Temperature: 0, Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: supportSystem},
-		{Role: llm.RoleUser, Content: supportUser(c)},
+		{Role: llm.RoleUser, Content: supportUser(c, hits)},
 	}})
 	if err != nil {
 		return Support{}, fmt.Errorf("судья смысла: %w", err)

@@ -42,7 +42,7 @@ const citeRule = `Ответ отдавай только вызовом инст
 - answer: прямой ответ кратко, одно-три предложения, без ссылок [chunk_id]. Каждое число ответа должно стоять в одной из цитат.
 - sources: chunk_id фрагментов, на которых держится ответ, — только из приложенных.
 - quotes: одна-три цитаты, подтверждающие ответ: кусок текста фрагмента с этим chunk_id, скопированный ДОСЛОВНО — без пересказа, сокращений и правки слов, чисел и знаков, не короче 15 символов; пропуск внутри цитаты отмечай «…». Факты и числа ответа — только из цитат.
-- unknown: answer — чего именно нет («в базе знаний нет данных о …»), clarify — уточняющий вопрос человеку по ближайшему, что нашлось во фрагментах (без фактов в нём), sources и quotes — пустые списки.
+- unknown: answer — чего именно нет («в базе знаний нет данных о …»), clarify — уточняющий вопрос человеку по ближайшему, что нашлось во фрагментах (без фактов в нём), sources — 1–3 ближайших по смыслу фрагмента (если фрагменты есть), quotes — пустой список.
 Если kb_answer вернул ошибку — исправь ровно то, что в ней названо, и вызови kb_answer снова.`
 
 // gateNote — пометка в сообщении пользователя, когда «не знаю» решил код
@@ -148,7 +148,7 @@ func (a *Answerer) Answer(ctx context.Context, q Question, mode Mode) (Answer, e
 		out.User += "\n\n" + Compose(out.Hits)
 	}
 	if mode == RAGCite {
-		return a.cite(ctx, out)
+		return a.cite(ctx, out, q)
 	}
 	msgs := []llm.Message{{Role: llm.RoleSystem, Content: out.System}, {Role: llm.RoleUser, Content: out.User}}
 
@@ -187,21 +187,27 @@ func (a *Answerer) plant(q Question, hits []kb.Hit) []kb.Hit {
 }
 
 // citeSteps — предел запросов rag+cite: первый ответ, по запросу на каждый
-// отказ проверки и на каждое напоминание «ответь инструментом».
-const citeSteps = 1 + MaxRejects + agent.MaxReminders
+// отказ проверки, на подсказку о числах (она в MaxRejects не идёт) и на
+// каждое напоминание «ответь инструментом».
+const citeSteps = 2 + MaxRejects + agent.MaxReminders
 
 // cite — ответ rag+cite: Gate по трассе (выдача пуста или фильтр отсёк
-// всё → схема kb_answer только с unknown и пометка в сообщении), затем
+// всё → схема kb_answer только с unknown и пометка в сообщении; выдача у
+// отвечающего одна, и решение известно до запроса к модели), затем
 // agent.Runner с одним завершающим инструментом kb_answer без права
 // закончить текстом. Текст ответа — CitedResult.Text, оценка — по
 // Cited (Eval). Цена — сумма шагов и платных шагов конвейера.
-func (a *Answerer) cite(ctx context.Context, out Answer) (Answer, error) {
+func (a *Answerer) cite(ctx context.Context, out Answer, q Question) (Answer, error) {
 	gated, why := Gate(out.Trace, out.Hits)
 	if gated {
 		out.User += "\n\n" + fmt.Sprintf(gateNote, why)
 	}
 	hits := out.Hits
-	fin := Finisher(func() []kb.Hit { return hits }, gated, why)
+	var names *retrieve.Aliases
+	if a.Pipeline != nil {
+		names, _ = a.Pipeline.Names(ctx) // без словаря — без метрики SpeciesMismatch
+	}
+	fin := FinisherOf(FinishOptions{Hits: func() []kb.Hit { return hits }, OnlyUnknown: gated, Why: why, Question: q.Text, Names: names})
 	spec := agent.Spec{Name: "answerer", System: out.System, Finish: []agent.Finisher{fin}, AllowText: false, MaxSteps: citeSteps}
 	r := agent.Runner{LLM: a.LLM, Model: a.model(), Temperature: 0}
 	started := time.Now()

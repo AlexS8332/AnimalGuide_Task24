@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/agent"
+	"github.com/AlexS8332/AnimalGuide_Task24/internal/agents"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/features"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/kb"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/llm"
@@ -33,15 +35,18 @@ const leadRule = `База знаний (kb_search) — снимок стате�
 // leadRule. Отличие от leadRule — запасного пути в Википедию и GBIF нет:
 // ответ с источниками обещает человеку, что каждый факт стоит в цитате из
 // базы, а статью Википедии kb_answer процитировать не даст (chunk_id
-// только из выдачи kb_search). Условие «если среди твоих инструментов есть
+// только из выдачи kb_search); карточки и источники на таком ходе ведущему
+// и не выдаются (agents.lead). Условие «если среди твоих инструментов есть
 // kb_answer» — потому что правило хода получает и составитель подборки, у
 // которого завершающего инструмента нет. Правило постоянное (одно и то же
-// каждый ход): решение кода «только не знаю» приходит схемой kb_answer и
-// пометкой в выдаче, а не правкой системного промпта — иначе ход с
-// «не знаю» обнулял бы кэш префикса окна.
-const citeLeadRule = `База знаний (kb_search) — снимок статей справочника и MDD v2.5. Если сразу после реплики человека стоит выдача kb_search, это вызов кодом до твоего первого шага: опирайся на неё. Если среди твоих инструментов есть kb_answer — ход заканчивай только им, не текстом, и отвечай только по выдаче kb_search этого хода (Википедия и GBIF для ответа не годятся: их не процитировать):
+// каждый ход): решение кода «только не знаю» приходит пометкой в выдаче
+// kb_search и отказом kb_answer, а не правкой системного промпта — иначе
+// ход с «не знаю» обнулял бы кэш префикса окна. Решается оно по всем
+// вызовам kb_search хода (Hook.cite) — отсюда «другой поиск этого хода».
+const citeLeadRule = `База знаний (kb_search) — снимок статей справочника и MDD v2.5. Если сразу после реплики человека стоит выдача kb_search, это вызов кодом до твоего первого шага: опирайся на неё. Если среди твоих инструментов есть kb_answer — ход заканчивай только им, не текстом, и отвечай только по выдаче kb_search этого хода (других источников на этом ходе нет: карточки, Википедию и GBIF не процитировать):
 - answer — кратко, без ссылок [chunk_id]; sources — chunk_id фрагментов из выдачи; quotes — куски текста фрагментов, скопированные ДОСЛОВНО (не короче 15 символов, пропуск — «…»); числа ответа — только из цитат;
-- ответа в выдаче нет (можно сначала вызвать kb_search другими словами) — status unknown: в answer — чего нет в базе знаний, в clarify — уточняющий вопрос человеку;
+- ответа в выдаче нет (можно сначала вызвать kb_search другими словами) — status unknown: в answer — чего нет в базе знаний, в clarify — уточняющий вопрос человеку, в sources — 1–3 ближайших найденных фрагмента;
+- kb_search пометил, что релевантных фрагментов нет, — ответ по существу kb_answer примет, только если другой kb_search этого хода их найдёт;
 - kb_answer вернул ошибку — исправь названное и вызови снова.`
 
 // hintNoKB — что сделать, если базы нет.
@@ -70,7 +75,7 @@ const hintNoKB = "соберите базу: go run ./cmd/kb index -strategy all
 // Механизм v24 rag.cite (требует rag): ведущий заканчивает ход только
 // завершающим kb_answer (Request.Finish), выдача kb_search этого хода
 // (вызов кодом и вызовы моделью) копится для проверки chunk_id и цитат, а
-// «только не знаю» решает Gate по трассе вызова кодом (Hook.cite).
+// «только не знаю» решает Gate по всем вызовам kb_search хода (Hook.cite).
 type Hook struct {
 	Searcher *kb.Searcher
 	Index    string // пусто — DefaultIndex
@@ -194,58 +199,88 @@ func (h *Hook) Before(ctx context.Context, t *runs.Turn) error {
 			"Оговорка: голое название животного («манул») и «сравни …» идут мимо ведущего (карточка, сравнение) — " +
 			"запроса ведущего тогда нет, и вызова kb_search не будет. Сам вызов — отдельное событие журнала инструментов." + detail})
 	if cite {
-		h.cite(ctx, t, obs, piped, cfg, history, k, text)
+		h.cite(ctx, t, obs, piped, index, text)
 	}
 	return nil
 }
 
 // cite — механизм rag.cite: ведущий заканчивает ход только kb_answer
-// (Request.Finish), проверка — по выдаче kb_search этого хода (obs). Gate
-// — по трассе вызова кодом: хук считает её сам до хода (тот же запрос,
-// что в Preload; инструмент потом отдаёт её, не ища второй раз), и если
-// фильтр отсёк всё — схема kb_answer на этот ход разрешает только unknown,
-// а к выдаче kb_search добавлена пометка. Без фильтра (rag без rag.filter и
-// rag.rewrite) трассы нет: «только unknown» — по пустой выдаче в момент
-// вызова kb_answer (Finisher). Принятый ответ — в итогах хода (Extras,
-// ключ rag.cite) для окна.
-func (h *Hook) cite(ctx context.Context, t *runs.Turn, obs *issued, piped bool, cfg retrieve.Config, history []string, k int, text string) {
-	gated, why := false, ""
-	gateLine := "трассы нет (без rag.filter и rag.rewrite) — «только не знаю» по пустой выдаче"
-	if piped {
-		cc := cfg
-		cc.K1 = k
-		if cc.Rewrite == retrieve.RewriteNone {
-			history = nil
-		}
-		tr, err := h.pipeline().Search(ctx, retrieve.Query{Text: text, Context: history}, cc)
-		switch {
-		case err != nil:
-			gateLine = "поиск до хода не удался (" + err.Error() + ") — «только не знаю» по пустой выдаче"
-		default:
-			obs.pre, obs.preQuery, obs.preK = &tr, text, cc.K1
-			gated, why = Gate(&tr, tr.Hits)
-			gateLine = "контекст есть — ответ по существу разрешён"
-			if gated {
-				obs.preNote = "kb_answer на этот ход примет только status unknown с уточняющим вопросом: " + why
-				gateLine = "«только не знаю»: " + why
-			}
+// (Request.Finish), проверка — по выдаче kb_search этого хода (obs).
+//
+// «Только не знаю» решается в момент вызова kb_answer по ВСЕМ вызовам
+// kb_search хода (issued.Gate): каждый вызов несёт свой Gate — у конвейера
+// (rag.filter, rag.rewrite) по его трассе, без конвейера — по трассе,
+// собранной из выдачи (plainGate: косинус лучшего фрагмента против порога
+// индекса, якорь — словарём названий). Все вызовы отсечены — только
+// unknown; хоть один дал релевантные фрагменты — ответ по существу
+// разрешён, а chunk_id и цитаты сверяются с объединённой выдачей. Поэтому
+// схема kb_answer в чате без ограничения enum: решение не известно до хода
+// (модель может поискать сама), запрет — отказом в Handle с подсказкой.
+// Поиска до хода ради Gate нет: вызов кодом (Preload) сам несёт свой Gate,
+// а ход, ушедший мимо ведущего (карточка, сравнение), ничего не тратит.
+//
+// Принятый ответ — в итогах хода (Extras, ключ rag.cite) для окна. Ход,
+// оборвавшийся без kb_answer (ошибка протокола, предел шагов), отвечает
+// «не знаю» с пометкой «не проверено» (Request.FinishFail).
+func (h *Hook) cite(ctx context.Context, t *runs.Turn, obs *issued, piped bool, index, text string) {
+	names, err := h.pipeline().Names(ctx)
+	if err != nil {
+		names = nil // без словаря — без метрики SpeciesMismatch и без порога у вызова без конвейера
+	}
+	gateLine := "«только не знаю» — если фильтр отсечёт всё во всех вызовах kb_search хода"
+	if !piped {
+		obs.plain = h.plainGate(index, names)
+		gateLine = "«только не знаю» — если во всех вызовах kb_search хода вид не назван и лучший косинус ниже порога индекса (фильтра нет)"
+		if names == nil {
+			gateLine = "«только не знаю» — по пустой выдаче (словаря названий нет: без якоря порог не применить)"
 		}
 	}
-	fin := Finisher(obs.Hits, gated, why)
+	fin := FinisherOf(FinishOptions{Hits: obs.Hits, Gate: obs.Gate, Question: text, Names: names})
 	inner := fin.Handle
 	fin.Handle = func(ctx context.Context, callID string, args json.RawMessage) (any, error) {
 		res, err := inner(ctx, callID, args)
 		if r, ok := res.(*CitedResult); ok && err == nil {
-			t.Extra(string(features.RAGCite), ViewOf(r, gated, why))
+			t.Extra(string(features.RAGCite), ViewOf(r))
 		}
 		return res, err
 	}
 	t.Request.Finish = append(t.Request.Finish, fin)
+	t.Request.FinishFail = func(err error) agents.Texter {
+		_, _, rel := obs.Gate()
+		r := UnverifiedResult(err, obs.Hits(), rel)
+		t.Extra(string(features.RAGCite), ViewOf(r))
+		t.Em.Log(agent.Event{Agent: HookName, Kind: agent.EventMechanism, Mechanism: string(features.RAGCite), Tool: FinishName,
+			Title:  "ответ с источниками: ход ведущего оборвался без kb_answer — человеку «не знаю» с пометкой «не проверено»",
+			Detail: "Причина: " + err.Error() + ".\nПроверенного ответа нет: вместо ошибки хода — «Не знаю: " + unverifiedAnswer + "», уточняющий вопрос и ближайшее найденное в базе."})
+		return r
+	}
 	t.Em.Log(agent.Event{Agent: HookName, Kind: agent.EventMechanism, Mechanism: string(features.RAGCite), Tool: FinishName,
 		Title: "ответ с источниками: ведущий заканчивает ход только kb_answer; " + gateLine,
 		Detail: "Код проверит ответ до человека: chunk_id — из выдачи kb_search этого хода, у ответа есть источник и цитата, " +
 			"каждая цитата — дословный кусок своего фрагмента, числа ответа стоят в цитатах. Не прошло — отказ с подсказкой и ещё " +
-			fmt.Sprintf("один запрос ведущего; после %d отказов ответ принимается с пометкой «не проверено».", MaxRejects)})
+			fmt.Sprintf("один запрос ведущего; после %d отказов ответ принимается с пометкой «не проверено». ", MaxRejects) +
+			"Карточки, Википедия и GBIF на этом ходе ведущему не выданы: ответ — только по базе знаний."})
+}
+
+// plainGate — Gate вызова kb_search без конвейера: трасса из выдачи —
+// лучший косинус (выдача dense), порог индекса (retrieve.MinScoreOf) и
+// якорь — виды, названные в запросе (словарь названий). Без словаря —
+// только пустая выдача: без якоря порог отсекал бы вопросы о названных
+// видах.
+func (h *Hook) plainGate(index string, names *retrieve.Aliases) func(ctx context.Context, query string, hits []kb.Hit, info kb.SearchInfo) (bool, string) {
+	return func(ctx context.Context, query string, hits []kb.Hit, info kb.SearchInfo) (bool, string) {
+		if names == nil || info.Mode != kb.Dense || h.Searcher == nil || h.Searcher.Store == nil {
+			return Gate(nil, hits)
+		}
+		tr := retrieve.Trace{Original: query, Hits: hits, Info: info, Anchored: names.Species(query)}
+		for _, x := range hits {
+			tr.TopDense = math.Max(tr.TopDense, x.Score)
+		}
+		if idx, err := h.Searcher.Store.Index(ctx, orIndex(index)); err == nil {
+			tr.MinScore, tr.MinScoreFrom = retrieve.MinScoreOf(retrieve.Config{}, idx)
+		}
+		return Gate(&tr, hits)
+	}
 }
 
 // CiteView — ответ kb_answer в итогах хода (Extras, ключ rag.cite): для
@@ -269,12 +304,10 @@ type CiteViewSrc struct {
 	Issued  bool   `json:"issued"` // выдавался в этом ходе
 }
 
-// ViewOf — CiteView принятого ответа.
-func ViewOf(r *CitedResult, gated bool, why string) CiteView {
-	v := CiteView{Text: r.Text(), Cited: r.Cited, Check: r.Check, Gated: gated, GateReason: why}
-	if r.Cited.Unknown() {
-		return v
-	}
+// ViewOf — CiteView принятого ответа. У «не знаю» источники — ближайшее
+// найденное (если выдача была).
+func ViewOf(r *CitedResult) CiteView {
+	v := CiteView{Text: r.Text(), Cited: r.Cited, Check: r.Check, Gated: r.Check.Gated, GateReason: r.Check.GateReason}
 	byID := map[string]kb.Hit{}
 	for _, h := range r.Hits {
 		byID[h.ID] = h
@@ -295,8 +328,10 @@ func ViewOf(r *CitedResult, gated bool, why string) CiteView {
 	for _, s := range r.Cited.Sources {
 		add(s.ChunkID)
 	}
-	for _, q := range r.Cited.Quotes {
-		add(q.ChunkID)
+	if !r.Cited.Unknown() {
+		for _, q := range r.Cited.Quotes {
+			add(q.ChunkID)
+		}
 	}
 	return v
 }
