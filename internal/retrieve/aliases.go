@@ -398,7 +398,7 @@ func LoadAliases(ctx context.Context, st *kb.Store) (*Aliases, error) {
 // AliasesOf — словарь из документов корпуса (для тестов и corpus.Load;
 // добавление к контракту).
 func AliasesOf(docs []corpus.Doc) *Aliases {
-	a := &Aliases{Canon: map[string]string{}, Latin: map[string]string{}}
+	a := &Aliases{Canon: map[string]string{}, Latin: map[string]string{}, Docs: map[string]string{}}
 	bad := map[string]bool{}
 	put := func(name, canon string) {
 		k := corpus.Normalize(name)
@@ -423,6 +423,9 @@ func AliasesOf(docs []corpus.Doc) *Aliases {
 		}
 		if canon == "" {
 			continue
+		}
+		if d.ID != "" {
+			a.Docs[canon] = d.ID
 		}
 		names := []string{canon}
 		names = append(names, sp.Aliases...)

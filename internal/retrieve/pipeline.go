@@ -29,6 +29,9 @@ const (
 	ReasonDup    = "повтор текста"
 	ReasonBeyond = "за пределами K1"
 	ReasonLLM    = "модель: не относится"
+	// ReasonScope — фрагмент статьи о другом виде, когда в реплике назван
+	// вид (рамка якоря, Config.Scope).
+	ReasonScope = "другой вид"
 )
 
 // Причины-шаблоны с числом: «порог 0.800», «хуже лучшего на 0.05».
@@ -169,6 +172,9 @@ func (p *Pipeline) gather(ctx context.Context, q Query, c Config) (Trace, error)
 
 	// Якорь — виды, названные в самой реплике (не из контекста).
 	t.Anchored = al.Species(t.Original)
+	if c.Scope && c.Filter {
+		scopeOf(al, &t)
+	}
 
 	// 2. Кандидаты.
 	if err := p.candidates(ctx, c, &t); err != nil {
@@ -424,8 +430,66 @@ func (p *Pipeline) candidates(ctx context.Context, c Config, t *Trace) error {
 			}
 		}
 	}
+	t.cos = cos
 	leads(t, cos)
 	return nil
+}
+
+// scopeOf — рамка якоря: документы названных в реплике видов (Trace.Scope)
+// и все документы о видах (speciesDocs). Без якоря или без словаря
+// документов (Aliases.Docs) рамки нет.
+func scopeOf(al *Aliases, t *Trace) {
+	if len(t.Anchored) == 0 || al == nil || len(al.Docs) == 0 {
+		return
+	}
+	t.speciesDocs = make(map[string]bool, len(al.Docs))
+	for _, id := range al.Docs {
+		t.speciesDocs[id] = true
+	}
+	for _, sp := range t.Anchored {
+		if id, ok := al.Docs[sp]; ok {
+			t.Scope = append(t.Scope, id)
+		}
+	}
+	if len(t.Scope) == 0 {
+		// Названный вид без своей статьи (синоним из вступления чужой
+		// статьи — так не бывает, но словарь может быть неполным): рамке не
+		// на что опереться.
+		t.speciesDocs = nil
+	}
+}
+
+// outOfScope — фрагмент статьи о другом виде при рамке якоря.
+func (t *Trace) outOfScope(docID string) bool {
+	if len(t.Scope) == 0 || !t.speciesDocs[docID] {
+		return false
+	}
+	for _, id := range t.Scope {
+		if id == docID {
+			return false
+		}
+	}
+	return true
+}
+
+// scopedLeads — отрыв кандидатов от лучшего косинуса своего запроса СРЕДИ
+// ФРАГМЕНТОВ ВНУТРИ РАМКИ: если лучший кандидат — фрагмент чужого вида
+// («кошачий медведь» тянет медведей), относительный порог от него отсекал
+// бы фрагменты названного вида, и выдача пустела бы целиком.
+func scopedLeads(t *Trace) {
+	if len(t.cos) == 0 {
+		return
+	}
+	in := make([]map[string]float64, len(t.cos))
+	for i, m := range t.cos {
+		in[i] = map[string]float64{}
+		for _, x := range t.Candidates {
+			if v, ok := m[x.ID]; ok && !t.outOfScope(x.DocID) {
+				in[i][x.ID] = v
+			}
+		}
+	}
+	leads(t, in)
 }
 
 // bm25Query — запрос i для BM25: из QueriesBM25, если он там есть.
@@ -550,6 +614,10 @@ func finish(t *Trace) {
 	}
 	half := (c.K1 + 1) / 2
 	llmScored := c.Rerank == RerankLLM && t.scores != nil
+	scoped := c.Filter && c.Scope && len(t.Scope) > 0
+	if scoped {
+		scopedLeads(t)
+	}
 	var keptSpans []Candidate
 	t.Hits = nil
 	kept := 0
@@ -560,6 +628,8 @@ func finish(t *Trace) {
 			switch {
 			case dense && len(t.Anchored) == 0 && x.Dense < t.MinScore:
 				x.Reason = reasonFloor(t.MinScore)
+			case scoped && t.outOfScope(x.DocID):
+				x.Reason = ReasonScope
 			case dense && x.behind(t.TopDense) > c.Delta+1e-12 && !exempt(*x, c, half):
 				x.Reason = reasonRelative(c.Delta)
 			case !dense && x.BM25 < BM25Floor*topBM25:
