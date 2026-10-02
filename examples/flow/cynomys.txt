@@ -1,0 +1,105 @@
+Флоу «Паспорт вида в блокнот» — вид «мексиканская луговая собачка», модель deepseek-v4-flash
+
+Вызовы (13, ответов модели 8):
+  #1  [sources]  search_wikipedia {"query": "мексиканская луговая собачка"}  ✓ 983 мс
+        найдено 5: Луговые собачки, Мексиканская луговая собачка, Чернохвостая луговая собачка, Мек …[обрезано]
+  #2  [daemon]  mdd_search {"text": "Mexican Prairie Dog"}  ✓ 54 мс
+        видов 1, первый — Cynomys mexicanus (id 1001717)
+
+  #3  [sources]  read_wikipedia {"title": "Мексиканская луговая собачка"}  ✓ 287 мс  ← №1
+        «Мексиканская луговая собачка», вступление и 2 разделов
+  #4  [daemon]  mdd_get {"id": 1001717}  ✓ 4 мс  ← №2
+        Cynomys mexicanus, id 1001717, Sciuridae
+
+  #5  [sources]  match_taxon {"scientific_name": "Cynomys mexicanus"}  ✓ 605 мс  ← №4
+        Cynomys mexicanus, usage_key 2437234
+  #6  [daemon]  facts_get {"species": "Cynomys mexicanus"}  ✓ 10 мс  ← №4
+        выпуск №1, фактов 4
+
+  #7  [sources]  taxon_tree {"usage_key": 2437234}  ✓ 564 мс  ← №5
+        уровней 7
+  #8  [sources]  vernacular_names {"usage_key": 2437234}  ✓ 148 мс  ← №5
+        названий 1
+
+  #9  [notes]  nb_open {"title": "Мексиканская луговая собачка — паспорт вида", "species": "Cynomys mexicanus"}  ✓ 1 мс
+        nb-c88d30d6afc5
+
+  #10 [notes]  nb_add {"notebook_id": "nb-c88d30d6afc5", "heading": "Таксономия", "text": "**Русское название:** мексиканс …[обрезано]  ✓ 2 мс  ← №9
+        раздел 1 из 1
+  #11 [notes]  nb_add {"notebook_id": "nb-c88d30d6afc5", "heading": "Описание", "text": "Мексиканская луговая собачка — не …[обрезано]  ✓ 2 мс  ← №9
+        раздел 2 из 2
+  #12 [notes]  nb_add {"notebook_id": "nb-c88d30d6afc5", "heading": "Интересные факты", "text": "По выпуску «Интересных фа …[обрезано]  ✓ 1 мс  ← №9
+        раздел 3 из 3
+
+  #13 [notes]  nb_close {"notebook_id": "nb-c88d30d6afc5"}  ✓ 30 мс  ← №9
+        examples/flow/notes/cynomys-mexicanus-nb-c88d30d6afc5.md, разделов 3
+
+Проверки:
+  ✓ выбор: search_wikipedia — №1
+  ✓ выбор: read_wikipedia — №3
+  ✓ выбор: mdd_search — №2
+  ✓ выбор: mdd_get — №4
+  ✓ выбор: match_taxon — №5
+  ✓ выбор: taxon_tree — №7
+  ✓ выбор: vernacular_names — №8
+  ✓ выбор: facts_get — №6
+  ✓ выбор: nb_open — №9
+  ✓ выбор: nb_add — №10, №11, №12
+  ✓ выбор: nb_close — №13
+  ✓ маршрут — все вызовы — на серверы своих маршрутов
+  ✓ данные: search_wikipedia → read_wikipedia.title — №3 read_wikipedia.title = "Мексиканская луговая собачка" ← №1 results.1.title
+  ✓ данные: mdd_search → mdd_get.id — №4 mdd_get.id = 1001717 ← №2 species.0.id
+  ✓ данные: mdd_get → match_taxon.scientific_name — №5 match_taxon.scientific_name = "Cynomys mexicanus" ← №4 sci_name
+  ✓ данные: match_taxon → taxon_tree.usage_key — №7 taxon_tree.usage_key = 2437234 ← №5 usage_key
+  ✓ данные: match_taxon → vernacular_names.usage_key — №8 vernacular_names.usage_key = 2437234 ← №5 usage_key
+  ✓ данные: mdd_get → facts_get.species — №6 facts_get.species = "Cynomys mexicanus" ← №4 sci_name
+  ✓ данные: nb_open → nb_add.notebook_id — №10 nb_add.notebook_id = "nb-c88d30d6afc5" ← №9 notebook_id; №11 nb_add.notebook_id = "nb-c88d30d6afc5" ← №9 notebook_id; №12 nb_add.notebook_id = "nb-c88d30d6afc5" ← №9 notebook_id
+  ✓ данные: nb_open → nb_close.notebook_id — №13 nb_close.notebook_id = "nb-c88d30d6afc5" ← №9 notebook_id
+  ✓ порядок: nb_open → nb_add — все nb_open раньше №10 nb_add
+  ✓ порядок: nb_add → nb_close — все nb_add раньше №13 nb_close
+  ✓ порядок: read_wikipedia → nb_add — все read_wikipedia раньше №10 nb_add
+  ✓ порядок: mdd_get → nb_open — все mdd_get раньше №9 nb_open
+  ✓ запрещённые инструменты — не вызывались
+  ✓ покрытие серверов — 3 из нужных 3: sources, daemon, notes
+  ✓ ссылки на источники — разделов 3, ссылки ведут на серверы: daemon, sources
+  ✓ серверы подтвердили — счётчики серверов совпали с трассой
+  ✓ серверы не перезапускались — PID до и после совпали
+  ✓ число вызовов — 13 при пределе 22
+  ✓ ошибки и повторы — ошибок и повторов нет
+  ✓ неизвестные инструменты — все имена — из реестра
+
+Серверы (насчитал сервер / в трассе):
+  sources  pid 5856  match_taxon 1/1, read_wikipedia 1/1, search_wikipedia 1/1, taxon_tree 1/1, vernacular_names 1/1
+  daemon   pid 12736  facts_get 1/1, mdd_get 1/1, mdd_search 1/1
+  notes    pid 7232  nb_add 3/3, nb_close 1/1, nb_open 1/1
+
+Файл: examples/flow/notes/cynomys-mexicanus-nb-c88d30d6afc5.md
+  # Мексиканская луговая собачка — паспорт вида
+  
+  Вид: *Cynomys mexicanus*
+  
+  ## Таксономия
+  
+  **Русское название:** мексиканская луговая собачка (подтверждено GBIF как народное название на русском).
+  
+  **Латинское название:** *Cynomys mexicanus* Merriam, 1892.
+  
+  **Положение в системе (MDD v2.5, 2026-07-28):**
+  - Отряд: Rodentia (грызуны)
+  - Семейство: Sciuridae (беличьи)
+  - Подсемейство: Xerinae
+  - Род: Cynomy …[обрезано]
+
+Итог модели: Блокнот о виде «мексиканская луговая собачка» (Cynomys mexicanus) закрыт.
+
+Путь к файлу: examples/flow/notes/cynomys-mexicanus-nb-c88d30d6afc5.md (3 раздела, 5921 байт, sha256 e180a610fbd2069d8baf2a7b5750b161162d7d24a1c15e02882bf267c650463f).
+
+Что вошло:
+- «Таксономия» — русское и латинское названия, положение в системе по MDD (Rodentia → Sciuridae → Xerinae → Cynomys), сверка с GBIF (ACCEPTED, usage_key 2437234), дерево классификации GBIF, статус МСОП EN, типовое местонахождение и распространение. Cites: mdd_search, mdd_get, match_taxon, taxon_tree, vernacular_names.
+- «Описание» — внешний вид, распространение и местообитания, размножение, использование в пищу. Cites: read_wikipedia, mdd_get.
+- «Интересные факты» — 4 подтверждённых факта из выпуска демона № 1, наблюдения GBIF (2691, Мексика/США) и один отброшенный факт с причиной. Cites: facts_get, read_wikipedia.
+
+Среди ссылок есть и Википедия/GBIF, и MDD.
+
+Цена: $0.0032, токенов 75365 (кэш 67584), время 19.3s
+Итог: ✓ флоу пройден

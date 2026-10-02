@@ -1,0 +1,286 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "doc_id": "manul",
+      "file": "manul.json",
+      "title": "Манул",
+      "source": "wikipedia-ru",
+      "revid": 154481742,
+      "chars": 24086,
+      "sha256": "8a8fa9ae0a350c8d58b76f629edbb80666c38fdeffbba35b2fa96c4dd8b5dd49"
+    },
+    {
+      "doc_id": "snow-leopard",
+      "file": "snow-leopard.json",
+      "title": "Ирбис",
+      "source": "wikipedia-ru",
+      "revid": 154897036,
+      "chars": 37742,
+      "sha256": "1cd48cc50a05d36d06f8c9236f9da23fbaf7fc44ecc626ad04f15b35db778061"
+    },
+    {
+      "doc_id": "amur-tiger",
+      "file": "amur-tiger.json",
+      "title": "Амурский тигр",
+      "source": "wikipedia-ru",
+      "revid": 154901092,
+      "chars": 15724,
+      "sha256": "244b8565a366ab897b9563b26270507bfb46539ecb75a7eb24c9f215e7c2d020"
+    },
+    {
+      "doc_id": "amur-leopard",
+      "file": "amur-leopard.json",
+      "title": "Дальневосточный леопард",
+      "source": "wikipedia-ru",
+      "revid": 154803680,
+      "chars": 62382,
+      "sha256": "c5b268131188b5a54416e077a44b4076d957389aee58b2dbeb6e86ac7aa6cbbb"
+    },
+    {
+      "doc_id": "lynx",
+      "file": "lynx.json",
+      "title": "Обыкновенная рысь",
+      "source": "wikipedia-ru",
+      "revid": 153260238,
+      "chars": 25118,
+      "sha256": "138e459c7057e1d7f40c3df2f26372ac0c660a94e237095be64e29d169c2de10"
+    },
+    {
+      "doc_id": "caracal",
+      "file": "caracal.json",
+      "title": "Каракал",
+      "source": "wikipedia-ru",
+      "revid": 152149050,
+      "chars": 4993,
+      "sha256": "a4e9193268422a30b54cc0d0676d0322791a2132e917bf924280eddbfc272d15"
+    },
+    {
+      "doc_id": "sand-cat",
+      "file": "sand-cat.json",
+      "title": "Барханный кот",
+      "source": "wikipedia-ru",
+      "revid": 153472259,
+      "chars": 4819,
+      "sha256": "4bbfde9d474a484ffbc3b0ceb57f562041fb0635ae046cb1b33d5c5f54491bff"
+    },
+    {
+      "doc_id": "wildcat",
+      "file": "wildcat.json",
+      "title": "Лесной кот",
+      "source": "wikipedia-ru",
+      "revid": 154769879,
+      "chars": 11110,
+      "sha256": "1ebafe6c43768133b67843611e1624c993f84795149bb5f6b5b869a975acf8f4"
+    },
+    {
+      "doc_id": "jungle-cat",
+      "file": "jungle-cat.json",
+      "title": "Камышовый кот",
+      "source": "wikipedia-ru",
+      "revid": 146186626,
+      "chars": 3210,
+      "sha256": "760f189b75aa4fa5681958b710a73ee22f86b68af9eae9369fee73481e6a9729"
+    },
+    {
+      "doc_id": "wolf",
+      "file": "wolf.json",
+      "title": "Волк",
+      "source": "wikipedia-ru",
+      "revid": 154542133,
+      "chars": 49790,
+      "sha256": "0be5ac05334d27957ac87941e9320c4dbe7c1b1e972079e271aac4b1970ddc00"
+    },
+    {
+      "doc_id": "dhole",
+      "file": "dhole.json",
+      "title": "Красный волк",
+      "source": "wikipedia-ru",
+      "revid": 150287847,
+      "chars": 11753,
+      "sha256": "a07be61080613fc69b9cf68eb385548e208e4376610e4c5261da399a913f7fb7"
+    },
+    {
+      "doc_id": "corsac",
+      "file": "corsac.json",
+      "title": "Корсак",
+      "source": "wikipedia-ru",
+      "revid": 153411425,
+      "chars": 5799,
+      "sha256": "be0a92c2a19661878d336632f901345c509a4d55000185847146ff53b3da7597"
+    },
+    {
+      "doc_id": "raccoon-dog",
+      "file": "raccoon-dog.json",
+      "title": "Енотовидная собака",
+      "source": "wikipedia-ru",
+      "revid": 154894687,
+      "chars": 15880,
+      "sha256": "c82044b39ba3efa12a4a0d66c835278b8c925739f3ae3c2f3c3b2cad4305f7bd"
+    },
+    {
+      "doc_id": "arctic-fox",
+      "file": "arctic-fox.json",
+      "title": "Песец",
+      "source": "wikipedia-ru",
+      "revid": 154112865,
+      "chars": 21305,
+      "sha256": "b761b7d3ca7e4a85ecb89df2eb777219546e6b47e0f74acab7e65a64f7a33b68"
+    },
+    {
+      "doc_id": "brown-bear",
+      "file": "brown-bear.json",
+      "title": "Бурый медведь",
+      "source": "wikipedia-ru",
+      "revid": 154287918,
+      "chars": 32866,
+      "sha256": "8ee61ae03dc437a18d526fddf6628d640e1286d29962698befe0adccbd61a596"
+    },
+    {
+      "doc_id": "asian-black-bear",
+      "file": "asian-black-bear.json",
+      "title": "Гималайский медведь",
+      "source": "wikipedia-ru",
+      "revid": 155300933,
+      "chars": 10205,
+      "sha256": "f06fba202e33930b9fd110d50b880af652d485137ebc785b62405029bb4bb480"
+    },
+    {
+      "doc_id": "polar-bear",
+      "file": "polar-bear.json",
+      "title": "Белый медведь",
+      "source": "wikipedia-ru",
+      "revid": 155197224,
+      "chars": 26488,
+      "sha256": "6f975c960606a111d7763f0b13458735cb136cd16100d2c533725cff1c07a57c"
+    },
+    {
+      "doc_id": "wolverine",
+      "file": "wolverine.json",
+      "title": "Росомаха",
+      "source": "wikipedia-ru",
+      "revid": 154658322,
+      "chars": 16597,
+      "sha256": "801930937c70e78dfc980bb0387b49e872edeada18728fc18530e2c13ed0314c"
+    },
+    {
+      "doc_id": "sable",
+      "file": "sable.json",
+      "title": "Соболь",
+      "source": "wikipedia-ru",
+      "revid": 154398781,
+      "chars": 28466,
+      "sha256": "16fd1a3b89ed02a49300dc668e1896e571da32147c39ccd79ee85f1ba3f6f232"
+    },
+    {
+      "doc_id": "yellow-throated-marten",
+      "file": "yellow-throated-marten.json",
+      "title": "Харза",
+      "source": "wikipedia-ru",
+      "revid": 150281016,
+      "chars": 8969,
+      "sha256": "1c08bfba9a8262377a2e0cfaed3060749eec5d5fd51d9a077893ce80660456c2"
+    },
+    {
+      "doc_id": "siberian-weasel",
+      "file": "siberian-weasel.json",
+      "title": "Колонок",
+      "source": "wikipedia-ru",
+      "revid": 154884487,
+      "chars": 12668,
+      "sha256": "ca24c345f0db276a0f9c18973ac7947b8e00ccfdeb3e283ed51d13f771b92a72"
+    },
+    {
+      "doc_id": "mountain-weasel",
+      "file": "mountain-weasel.json",
+      "title": "Солонгой",
+      "source": "wikipedia-ru",
+      "revid": 155361550,
+      "chars": 8548,
+      "sha256": "5c15ad786c29fd0cd1619f30d3c04ed6b55958fec14c45dfff11cd9d93ed6ce9"
+    },
+    {
+      "doc_id": "marbled-polecat",
+      "file": "marbled-polecat.json",
+      "title": "Перевязка",
+      "source": "wikipedia-ru",
+      "revid": 155361552,
+      "chars": 6544,
+      "sha256": "327eae62ac2112ad7f75d9ba439916ef971dcc5e5d9237b031ae5f34269c1bba"
+    },
+    {
+      "doc_id": "otter",
+      "file": "otter.json",
+      "title": "Выдра",
+      "source": "wikipedia-ru",
+      "revid": 155314291,
+      "chars": 50650,
+      "sha256": "af502e4a402db65733ac8e2a4d051d3ea582640b2af0e5050184a7382b36caf4"
+    },
+    {
+      "doc_id": "badger",
+      "file": "badger.json",
+      "title": "Барсук",
+      "source": "wikipedia-ru",
+      "revid": 155240314,
+      "chars": 62785,
+      "sha256": "1f1f0ad527bad2ce9ceb9809379a2e9758b123d5b507947680b7830736b2e959"
+    },
+    {
+      "doc_id": "red-panda",
+      "file": "red-panda.json",
+      "title": "Малая панда",
+      "source": "wikipedia-ru",
+      "revid": 154650955,
+      "chars": 8208,
+      "sha256": "6cc30fd822e4f7f16d55b6dbefcc4072850402fefbb7d807f56d5312e1c6bc5b"
+    },
+    {
+      "doc_id": "striped-hyena",
+      "file": "striped-hyena.json",
+      "title": "Полосатая гиена",
+      "source": "wikipedia-ru",
+      "revid": 155261709,
+      "chars": 11289,
+      "sha256": "a1208dcab9940736813f68bd5af6185006ee7d66af7c01fc196563fb0b990bc7"
+    },
+    {
+      "doc_id": "felidae",
+      "file": "felidae.json",
+      "title": "Кошачьи",
+      "source": "wikipedia-ru",
+      "revid": 154663232,
+      "chars": 8013,
+      "sha256": "b056625a42177482b37cb9abb7bb351f356e8a39c267af945c7a6362314fa559"
+    },
+    {
+      "doc_id": "canidae",
+      "file": "canidae.json",
+      "title": "Псовые",
+      "source": "wikipedia-ru",
+      "revid": 154124236,
+      "chars": 8559,
+      "sha256": "f866ececcd4ee8cdc0029471658919f650c4337a24b7658860b63258a30ef3e2"
+    },
+    {
+      "doc_id": "mustelidae",
+      "file": "mustelidae.json",
+      "title": "Куньи",
+      "source": "wikipedia-ru",
+      "revid": 155402829,
+      "chars": 7580,
+      "sha256": "c28b190fa0a40b8dc2a54353f1f6f731af9e191d5c6886081608a1fe0e902bc4"
+    },
+    {
+      "doc_id": "mdd-carnivora",
+      "file": "mdd-carnivora.json",
+      "title": "Хищные (Carnivora) в Mammal Diversity Database",
+      "source": "mdd",
+      "chars": 28706,
+      "sha256": "9b55317312882cfa042ab9d3fe4adac3c6d823f6dec50ad75a9bc1cb6694ba49"
+    }
+  ],
+  "chars": 630852,
+  "pages": 350.5,
+  "corpus_sha": "7b926f7a18d0bff5fcd783e558234cb92c4530846be1bac338e99bc07491dcea"
+}

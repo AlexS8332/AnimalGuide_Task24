@@ -1,0 +1,3 @@
+# Снимок сверяется по sha256 байтов файлов: git не должен менять концы строк
+# (core.autocrlf=true на Windows превратил бы LF в CRLF при checkout).
+* -text

@@ -1,0 +1,115 @@
+Флоу «Паспорт вида в блокнот» — вид «малая панда», модель deepseek-v4-flash
+
+Вызовы (17, ответов модели 9):
+  #1  [sources]  search_wikipedia {"query": "малая панда"}  ✓ 1023 мс
+        найдено 5: Малая панда, Большая панда, Панда, Пандовые, Кунг-фу панда 4
+  #2  [daemon]  mdd_search {"text": "Ailurus"}  ✓ 42 мс
+        видов 9, первый — Ailurus fulgens (id 1005802)
+
+  #3  [sources]  read_wikipedia {"title": "Малая панда"}  ✓ 416 мс  ← №1
+        «Малая панда», вступление и 11 разделов
+  #4  [daemon]  mdd_get {"id": 1005802}  ✓ 6 мс  ← №2
+        Ailurus fulgens, id 1005802, Ailuridae
+
+  #5  [sources]  read_wikipedia {"title": "Малая панда", "section": "Описание"}  ✓ 1 мс  ← №1
+        «Малая панда», раздел «Описание»
+  #6  [sources]  read_wikipedia {"title": "Малая панда", "section": "Систематика"}  ✓ 1 мс  ← №1
+        «Малая панда», раздел «Систематика»
+  #7  [sources]  match_taxon {"scientific_name": "Ailurus fulgens"}  ✓ 421 мс  ← №4
+        Ailurus fulgens, usage_key 5219446
+
+  #8  [sources]  taxon_tree {"usage_key": 5219446}  ✓ 340 мс  ← №7
+        уровней 7
+  #9  [sources]  vernacular_names {"usage_key": 5219446}  ✓ 105 мс  ← №7
+        названий 1
+  #10 [daemon]  facts_get {"species": "1005802"}  ✗ 6 мс  ← №4
+        ошибка: выпусков о виде Ailurus fulgens (mdd-id 1005802) ещё не было: демон выбирает виды случайно. facts_search ищет по тексту выпусков (русское название, слово из факта), facts_latest — последние выпуски
+
+  #11 [sources]  read_wikipedia {"section": "Образ жизни", "title": "Малая панда"}  ✓ 3 мс  ← №1
+        «Малая панда», раздел «Образ жизни»
+  #12 [sources]  read_wikipedia {"section": "Происхождение названия", "title": "Малая панда"}  ✓ 4 мс  ← №1
+        «Малая панда», раздел «Происхождение названия»
+
+  #13 [notes]  nb_open {"species": "Ailurus fulgens", "title": "Малая панда — паспорт вида"}  ✓ 1 мс
+        nb-75dc3baf3bc7
+
+  #14 [notes]  nb_add {"notebook_id": "nb-75dc3baf3bc7", "heading": "Таксономия", "text": "**Русское название:** малая пан …[обрезано]  ✓ 2 мс  ← №13
+        раздел 1 из 1
+  #15 [notes]  nb_add {"notebook_id": "nb-75dc3baf3bc7", "heading": "Описание", "text": "Длина тела составляет примерно 51 …[обрезано]  ✓ 2 мс  ← №13
+        раздел 2 из 2
+  #16 [notes]  nb_add {"notebook_id": "nb-75dc3baf3bc7", "heading": "Интересные факты", "text": "Выпуска «Интересных факто …[обрезано]  ✓ 2 мс  ← №13
+        раздел 3 из 3
+
+  #17 [notes]  nb_close {"notebook_id": "nb-75dc3baf3bc7"}  ✓ 55 мс  ← №13
+        examples/flow/notes/ailurus-fulgens-nb-75dc3baf3bc7.md, разделов 3
+
+Проверки:
+  ✓ выбор: search_wikipedia — №1
+  ⚠ выбор: read_wikipedia — вызовов 5 при пределе 4: №3, №5, №6, №11, №12
+  ✓ выбор: mdd_search — №2
+  ✓ выбор: mdd_get — №4
+  ✓ выбор: match_taxon — №7
+  ✓ выбор: taxon_tree — №8
+  ✓ выбор: vernacular_names — №9
+  ✓ выбор: facts_get — №10
+  ✓ выбор: nb_open — №13
+  ✓ выбор: nb_add — №14, №15, №16
+  ✓ выбор: nb_close — №17
+  ✓ маршрут — все вызовы — на серверы своих маршрутов
+  ✓ данные: search_wikipedia → read_wikipedia.title — №3 read_wikipedia.title = "Малая панда" ← №1 results.0.title; №5 read_wikipedia.title = "Малая панда" ← №1 results.0.title; №6 read_wikipedia.title = "Малая панда" ← №1 results.0.title; и ещё 2
+  ✓ данные: mdd_search → mdd_get.id — №4 mdd_get.id = 1005802 ← №2 species.0.id
+  ✓ данные: mdd_get → match_taxon.scientific_name — №7 match_taxon.scientific_name = "Ailurus fulgens" ← №4 sci_name
+  ✓ данные: match_taxon → taxon_tree.usage_key — №8 taxon_tree.usage_key = 5219446 ← №7 usage_key
+  ✓ данные: match_taxon → vernacular_names.usage_key — №9 vernacular_names.usage_key = 5219446 ← №7 usage_key
+  ✓ данные: mdd_get → facts_get.species — №10 facts_get.species = "1005802" ← №4 id
+  ✓ данные: nb_open → nb_add.notebook_id — №14 nb_add.notebook_id = "nb-75dc3baf3bc7" ← №13 notebook_id; №15 nb_add.notebook_id = "nb-75dc3baf3bc7" ← №13 notebook_id; №16 nb_add.notebook_id = "nb-75dc3baf3bc7" ← №13 notebook_id
+  ✓ данные: nb_open → nb_close.notebook_id — №17 nb_close.notebook_id = "nb-75dc3baf3bc7" ← №13 notebook_id
+  ✓ порядок: nb_open → nb_add — все nb_open раньше №14 nb_add
+  ✓ порядок: nb_add → nb_close — все nb_add раньше №17 nb_close
+  ✓ порядок: read_wikipedia → nb_add — все read_wikipedia раньше №14 nb_add
+  ✓ порядок: mdd_get → nb_open — все mdd_get раньше №13 nb_open
+  ✓ запрещённые инструменты — не вызывались
+  ✓ покрытие серверов — 3 из нужных 3: sources, daemon, notes
+  ✓ ссылки на источники — разделов 3, ссылки ведут на серверы: daemon, sources
+  ✓ серверы подтвердили — счётчики серверов совпали с трассой
+  ✓ серверы не перезапускались — PID до и после совпали
+  ✓ число вызовов — 17 при пределе 22
+  ⚠ ошибки и повторы — ошибок 1: №10 facts_get
+  ✓ неизвестные инструменты — все имена — из реестра
+
+Серверы (насчитал сервер / в трассе):
+  sources  pid 2076  match_taxon 1/1, read_wikipedia 5/5, search_wikipedia 1/1, taxon_tree 1/1, vernacular_names 1/1
+  daemon   pid 12736  facts_get 1/1, mdd_get 1/1, mdd_search 1/1
+  notes    pid 7760  nb_add 3/3, nb_close 1/1, nb_open 1/1
+
+Файл: examples/flow/notes/ailurus-fulgens-nb-75dc3baf3bc7.md
+  # Малая панда — паспорт вида
+  
+  Вид: *Ailurus fulgens*
+  
+  ## Таксономия
+  
+  **Русское название:** малая панда, кошачий медведь, красная (рыжая) панда.
+  
+  **Латинское название:** *Ailurus fulgens* F. Cuvier, 1825.
+  
+  **Систематическое положение (MDD v2.5):**
+  - Отряд: Carnivora (хищные)
+  - Семейство: Ailuridae (пандовые)
+  - Подсемейство: Ailurinae
+  - Род: *Ailurus*
+  - Вид: *Ailurus fulgens* (Western Red Panda)
+  
+  ** …[обрезано]
+
+Итог модели: Блокнот о виде «малая панда» (Ailurus fulgens) закрыт и записан: examples/flow/notes/ailurus-fulgens-nb-75dc3baf3bc7.md (3 раздела, 8372 байта, sha256 1cf44dc9…).
+
+Что вошло:
+- «Таксономия» — русские и латинское названия, положение в MDD v2.5 (Carnivora → Ailuridae → Ailurinae → Ailurus → A. fulgens), дерево GBIF по usage_key 5219446 (ACCEPTED, EXACT), русское народное название из GBIF, история систематики, заметка MDD о спорах с A. styani, статус МСОП EN и распространение. Cites: mdd_search, mdd_get, match_taxon, taxon_tree, vernacular_names, read_wikipedia.
+- «Описание» — размеры и вес, анатомия («шестой палец», конвергентная эволюция), окрас и камуфляж, происхождение названия. Cites: read_wikipedia.
+- «Интересные факты» — выпуска демона о виде нет (нормальный ответ), факты взяты из статьи Википедии: бамбуковая диета (95 %), неспособность переваривать целлюлозу, суточные нормы и 13 часов на еду, избирательность, щебетание, миролюбие, продолжительность жизни. Cites: read_wikipedia, facts_get.
+
+Среди ссылок есть и Википедия/GBIF, и MDD.
+
+Цена: $0.0041, токенов 92432 (кэш 82944), время 21.7s
+Итог: ✓ флоу пройден

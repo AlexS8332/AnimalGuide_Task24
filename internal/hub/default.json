@@ -1,0 +1,47 @@
+{
+  "servers": [
+    {
+      "name": "sources",
+      "title": "Источники: Википедия и GBIF",
+      "color": "#2f7d4f",
+      "transport": "stdio",
+      "args": ["-mdd-sync=false", "-data", "${DATA}"],
+      "expect": "animals-sources",
+      "tools": [
+        "search_wikipedia",
+        "read_wikipedia",
+        "match_taxon",
+        "taxon_tree",
+        "taxon_children",
+        "vernacular_names"
+      ]
+    },
+    {
+      "name": "daemon",
+      "title": "Демон: MDD и «Интересные факты»",
+      "color": "#b0661c",
+      "transport": "http",
+      "url": "${DAEMON}",
+      "token_env": "MCP_TOKEN",
+      "expect": "animals-daemon",
+      "tools": [
+        "mdd_get",
+        "mdd_search",
+        "mdd_changes",
+        "facts_latest",
+        "facts_get",
+        "facts_search",
+        "summary_get"
+      ]
+    },
+    {
+      "name": "notes",
+      "title": "Блокнот натуралиста",
+      "color": "#3b6ea8",
+      "transport": "stdio",
+      "args": ["-role", "notes", "-data", "${DATA}"],
+      "expect": "animals-notes",
+      "tools": ["nb_*"]
+    }
+  ]
+}

@@ -1,13 +1,43 @@
 # Секреты
+.env
 .env.local
 *.env.local
+.env.local.example
 
 # Сборка
 /bin/
 *.exe
 *.test
+*.out
+/animal-guide
+/animals-mcp
+/mcp-list
 
 # ОС и редакторы
 Thumbs.db
 .DS_Store
 .idea/
+.vscode/
+
+# Локальные метаданные рабочего окружения
+assignment.json
+
+# Отладочные бинарники VS Code / dlv
+__debug_bin*
+
+# Данные рабочего каталога: диалоги, слои памяти, профили, подборки и свод.
+# Слэш в начале оставляет правило только на корень — примеры в examples/ и
+# памятники прошлых форматов в testdata/legacy/ нужны в git.
+/history/
+/memory/
+/profiles/
+/collections/
+/invariants/
+server.*.log
+/trivia.db*
+/exports/
+/notes/
+
+# База знаний: пересобираемый индекс (kb index), в git не попадает.
+kb.db*
+/kb/

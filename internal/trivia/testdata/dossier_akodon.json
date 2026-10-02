@@ -1,0 +1,110 @@
+{
+  "pick": {
+    "id": 0,
+    "species_id": 1002423,
+    "sci_name": "Akodon surdus",
+    "iucn": "VU",
+    "picked_at": "2026-09-24T12:48:06.7159839+03:00",
+    "attempts": 1,
+    "eligibility": {
+      "species_id": 1002423,
+      "sci_name": "Akodon surdus",
+      "checked_at": "2026-09-24T12:48:06.7159839+03:00",
+      "ok": true,
+      "wiki_lang": "en",
+      "wiki_title": "Silent grass mouse",
+      "wiki_url": "https://en.wikipedia.org/wiki/Silent_grass_mouse",
+      "en_title": "Silent grass mouse",
+      "gbif_key": 2437889,
+      "occurrences": 53
+    },
+    "weights": null
+  },
+  "species": {
+    "id": 1002423,
+    "sci_name": "Akodon surdus",
+    "common_name": "Silent Grass Mouse",
+    "other_common_names": [
+      "Slate-bellied Akodont"
+    ],
+    "order": "Rodentia",
+    "family": "Cricetidae",
+    "subfamily": "Sigmodontinae",
+    "genus": "Akodon",
+    "epithet": "surdus",
+    "authority": "O. Thomas, 1917",
+    "year": 1917,
+    "iucn": "VU",
+    "extinct": false,
+    "domestic": false,
+    "countries": [
+      "Peru"
+    ],
+    "continents": [
+      "South America"
+    ],
+    "realms": [
+      "Neotropic"
+    ],
+    "type_locality": "\"[Hacienda] Huadquiña, 5000 ft [= 1524 m],\" southern margin of the Urubamba River, Santa Teresa, Cusco, Peru."
+  },
+  "name_ru": "Безмолвный хомячок",
+  "materials": [
+    {
+      "id": "S1",
+      "kind": "mdd",
+      "title": "MDD: Akodon surdus",
+      "url": "https://www.mammaldiversity.org/taxon/1002423/",
+      "text": "Латинское название: Akodon surdus\nАвтор и год описания: O. Thomas, 1917\nСистематика: отряд Rodentia, семейство Cricetidae, подсемейство Sigmodontinae, род Akodon\nАнглийское название: Silent Grass Mouse\nДругие английские названия: Slate-bellied Akodont\nСтатус МСОП: VU (уязвимые)\nВымерший вид: нет\nСтраны обитания: Peru\nКонтиненты: South America\nБиогеографические области: Neotropic\nТиповое местонахождение: \"[Hacienda] Huadquiña, 5000 ft [= 1524 m],\" southern margin of the Urubamba River, Santa Teresa, Cusco, Peru.",
+      "tool": "mdd"
+    },
+    {
+      "id": "S2",
+      "kind": "wikipedia",
+      "title": "Википедия (en): Silent grass mouse",
+      "url": "https://en.wikipedia.org/wiki/Silent_grass_mouse",
+      "text": "The silent grass mouse or slate-bellied akodont (Akodon surdus) is a species of rodent in the family Cricetidae. It is endemic to Peru.",
+      "tool": "wikipedia_article (en)"
+    },
+    {
+      "id": "S3",
+      "kind": "wikipedia",
+      "title": "Википедия (en): Silent grass mouse — Distribution and habitat",
+      "url": "https://en.wikipedia.org/wiki/Silent_grass_mouse#Distribution_and_habitat",
+      "text": "The silent grass mouse lives primarily in the Cusco Region in the south east of Peru at altitudes of between 1,500 and 3,000m. Its habitat is generally confined to humid montane forests and it can also persist in selectively logged areas.",
+      "tool": "wikipedia_article (en)"
+    },
+    {
+      "id": "S4",
+      "kind": "wikipedia",
+      "title": "Википедия (en): Silent grass mouse — Threats",
+      "url": "https://en.wikipedia.org/wiki/Silent_grass_mouse#Threats",
+      "text": "The grass mouse is listed as a vulnerable species on the IUCN Red List and its numbers are thought to be decreasing. This is mainly due to human settlement, commercial clearcutting and farmland creation which is degrading and declining the Andean forests where the grass mouse lives.",
+      "tool": "wikipedia_article (en)"
+    },
+    {
+      "id": "S5",
+      "kind": "gbif",
+      "title": "GBIF: наблюдения Akodon surdus",
+      "url": "https://www.gbif.org/species/2437889",
+      "text": "Наблюдения вида в GBIF (ключ таксона 2437889). Записей за всё время: 53.\nЗаписей за последние 30 дней (2026-08-25 — 2026-09-24, по дате наблюдения): 0.\n\nСтраны с наибольшим числом записей за всё время (сверка с ареалом по MDD):\n- PE Peru — 53 (в ареале MDD)\nЧисло записей — это оцифрованные наблюдения и музейные образцы, а не численность вида.",
+      "tool": "gbif occurrence facet=country"
+    }
+  ],
+  "observations": {
+    "gbif_key": 2437889,
+    "total": 53,
+    "window_days": 30,
+    "recent": 0,
+    "by_country": [
+      {
+        "code": "PE",
+        "name": "Peru",
+        "count": 53,
+        "range": "in"
+      }
+    ]
+  },
+  "collected_at": "2026-09-24T12:48:06.9615101+03:00",
+  "took": 245526200
+}

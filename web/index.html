@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AnimalGuide — справочник по животным</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/vendor/marked/marked.min.js"></script>
+</head>
+<body>
+  <!-- Пульт липнет к верху окна (ФТ-36): диалог и ветки, шкала контекста,
+       механизмы и панели, которые приносят механизмы (профиль, память,
+       подборка, свод). Лента и журнал ездят под ним. -->
+  <header class="pult" id="pult">
+    <div class="pult-row">
+      <div class="brand">
+        <span class="brand-mark">🦉</span>
+        <div>
+          <h1>AnimalGuide</h1>
+          <p class="brand-sub">справочник по животным, с которым разговаривают</p>
+        </div>
+      </div>
+      <div class="dialog-pick">
+        <label for="dialog-select" class="lbl">Диалог</label>
+        <select id="dialog-select" data-change="pickDialog"></select>
+        <button type="button" class="solid" data-action="newDialog" id="new-dialog">Новый диалог</button>
+        <button type="button" class="ghost" data-action="openWindow" data-arg="windows" id="windows-button" title="Отдельные окна: память, профили, свод, подборки">Окна ▾</button>
+      </div>
+      <dl class="readings" id="readings"></dl>
+    </div>
+    <div class="pult-panels" id="pult-panels">
+      <section class="panel" id="panel-branches">
+        <h2>Ветки диалога</h2>
+        <div id="branches"></div>
+      </section>
+      <section class="panel" id="panel-context">
+        <h2>Контекст последнего хода</h2>
+        <div id="context"></div>
+      </section>
+      <section class="panel wide" id="panel-mechanisms">
+        <h2>Механизмы диалога <span class="hint" id="mech-count"></span></h2>
+        <div id="mechanisms" class="mechs"></div>
+      </section>
+      <div id="ext-panels" class="ext-panels"></div>
+    </div>
+  </header>
+
+  <main class="stage">
+    <!-- Лента: сообщения и карточки, швы «сервер перезапущен», чипы правок
+         механизмов под ответами. -->
+    <section class="feed" id="feed-wrap">
+      <div id="feed" class="feed-list"></div>
+      <form class="composer" id="composer" data-submit="sendComposer">
+        <textarea id="composer-text" rows="2" placeholder="Спросите про животное: «рысь», «а чем она питается?», «сравни рысь и манула»…"></textarea>
+        <div class="composer-actions">
+          <button type="submit" class="solid" id="send-button">Отправить</button>
+          <span class="hint" id="composer-hint"></span>
+        </div>
+      </form>
+    </section>
+
+    <!-- Журнал выбранного хода и вкладка «Промпты»: журнал и результат —
+         два потока с разными потребителями (ИП-9). -->
+    <aside class="journal" id="journal">
+      <div class="tabs">
+        <button type="button" class="tab" data-action="tab" data-arg="events" id="tab-events">Журнал</button>
+        <button type="button" class="tab" data-action="tab" data-arg="prompts" id="tab-prompts">Промпты</button>
+        <span class="journal-turn" id="journal-turn"></span>
+      </div>
+      <div id="journal-body" class="journal-body"></div>
+    </aside>
+  </main>
+
+  <dialog id="window" class="window">
+    <div class="window-head">
+      <h2 id="window-title"></h2>
+      <button type="button" class="ghost" data-action="closeWindow">Закрыть</button>
+    </div>
+    <div id="window-body" class="window-body"></div>
+  </dialog>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="/app.js"></script>
+  <script src="/hub.js"></script>
+  <script src="/kb.js"></script>
+</body>
+</html>

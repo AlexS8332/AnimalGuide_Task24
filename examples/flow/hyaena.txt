@@ -1,0 +1,111 @@
+Флоу «Паспорт вида в блокнот» — вид «полосатая гиена», модель deepseek-v4-flash
+
+Вызовы (15, ответов модели 9):
+  #1  [sources]  search_wikipedia {"query": "полосатая гиена"}  ✓ 786 мс
+        найдено 5: Полосатая гиена, Пятнистая гиена, Гиены, Список млекопитающих, занесённых в Крас …[обрезано]
+  #2  [daemon]  mdd_search {"text": "Hyaena hyaena"}  ✓ 57 мс
+        видов 1, первый — Hyaena hyaena (id 1006072)
+
+  #3  [sources]  read_wikipedia {"title": "Полосатая гиена"}  ✓ 216 мс  ← №1
+        «Полосатая гиена», вступление и 9 разделов
+  #4  [daemon]  mdd_get {"id": 1006072}  ✓ 3 мс  ← №2
+        Hyaena hyaena, id 1006072, Hyaenidae
+  #5  [sources]  match_taxon {"scientific_name": "Hyaena hyaena"}  ✓ 382 мс  ← №4
+        Hyaena hyaena, usage_key 5218777
+  #6  [daemon]  facts_get {"species": "1006072"}  ✗ 5 мс  ← №4
+        ошибка: выпусков о виде Hyaena hyaena (mdd-id 1006072) ещё не было: демон выбирает виды случайно. facts_search ищет по тексту выпусков (русское название, слово из факта), facts_latest — последние выпуски
+
+  #7  [sources]  taxon_tree {"usage_key": 5218777}  ✓ 400 мс  ← №5
+        уровней 7
+  #8  [sources]  vernacular_names {"usage_key": 5218777}  ✓ 126 мс  ← №5
+        названий 1
+  #9  [sources]  read_wikipedia {"title": "Полосатая гиена", "section": "Внешний вид"}  ✓ 3 мс  ← №1
+        «Полосатая гиена», раздел «Внешний вид»
+  #10 [sources]  read_wikipedia {"title": "Полосатая гиена", "section": "Образ жизни и поведение"}  ✓ 7 мс  ← №1
+        «Полосатая гиена», раздел «Образ жизни и поведение»
+
+  #11 [notes]  nb_open {"title": "Полосатая гиена — паспорт вида", "species": "Hyaena hyaena"}  ✓ 2 мс
+        nb-a9f96a4de707
+
+  #12 [notes]  nb_add {"notebook_id": "nb-a9f96a4de707", "heading": "Таксономия", "text": "**Русское название:** Полосатая …[обрезано]  ✓ 1 мс  ← №11
+        раздел 1 из 1
+
+  #13 [notes]  nb_add {"cites": ["read_wikipedia"], "heading": "Описание", "notebook_id": "nb-a9f96a4de707", "text": "Поло …[обрезано]  ✓ 2 мс  ← №11
+        раздел 2 из 2
+
+  #14 [notes]  nb_add {"cites": ["facts_get", "read_wikipedia", "mdd_get"], "heading": "Интересные факты", "notebook_id":  …[обрезано]  ✓ 1 мс  ← №11
+        раздел 3 из 3
+
+  #15 [notes]  nb_close {"notebook_id": "nb-a9f96a4de707"}  ✓ 8 мс  ← №11
+        examples/flow/notes/hyaena-hyaena-nb-a9f96a4de707.md, разделов 3
+
+Проверки:
+  ✓ выбор: search_wikipedia — №1
+  ✓ выбор: read_wikipedia — №3, №9, №10
+  ✓ выбор: mdd_search — №2
+  ✓ выбор: mdd_get — №4
+  ✓ выбор: match_taxon — №5
+  ✓ выбор: taxon_tree — №7
+  ✓ выбор: vernacular_names — №8
+  ✓ выбор: facts_get — №6
+  ✓ выбор: nb_open — №11
+  ✓ выбор: nb_add — №12, №13, №14
+  ✓ выбор: nb_close — №15
+  ✓ маршрут — все вызовы — на серверы своих маршрутов
+  ✓ данные: search_wikipedia → read_wikipedia.title — №3 read_wikipedia.title = "Полосатая гиена" ← №1 results.0.title; №9 read_wikipedia.title = "Полосатая гиена" ← №1 results.0.title; №10 read_wikipedia.title = "Полосатая гиена" ← №1 results.0.title
+  ✓ данные: mdd_search → mdd_get.id — №4 mdd_get.id = 1006072 ← №2 species.0.id
+  ✓ данные: mdd_get → match_taxon.scientific_name — №5 match_taxon.scientific_name = "Hyaena hyaena" ← №4 sci_name
+  ✓ данные: match_taxon → taxon_tree.usage_key — №7 taxon_tree.usage_key = 5218777 ← №5 usage_key
+  ✓ данные: match_taxon → vernacular_names.usage_key — №8 vernacular_names.usage_key = 5218777 ← №5 usage_key
+  ✓ данные: mdd_get → facts_get.species — №6 facts_get.species = "1006072" ← №4 id
+  ✓ данные: nb_open → nb_add.notebook_id — №12 nb_add.notebook_id = "nb-a9f96a4de707" ← №11 notebook_id; №13 nb_add.notebook_id = "nb-a9f96a4de707" ← №11 notebook_id; №14 nb_add.notebook_id = "nb-a9f96a4de707" ← №11 notebook_id
+  ✓ данные: nb_open → nb_close.notebook_id — №15 nb_close.notebook_id = "nb-a9f96a4de707" ← №11 notebook_id
+  ✓ порядок: nb_open → nb_add — все nb_open раньше №12 nb_add
+  ✓ порядок: nb_add → nb_close — все nb_add раньше №15 nb_close
+  ✓ порядок: read_wikipedia → nb_add — все read_wikipedia раньше №12 nb_add
+  ✓ порядок: mdd_get → nb_open — все mdd_get раньше №11 nb_open
+  ✓ запрещённые инструменты — не вызывались
+  ✓ покрытие серверов — 3 из нужных 3: sources, daemon, notes
+  ✓ ссылки на источники — разделов 3, ссылки ведут на серверы: daemon, sources
+  ✓ серверы подтвердили — счётчики серверов совпали с трассой
+  ✓ серверы не перезапускались — PID до и после совпали
+  ✓ число вызовов — 15 при пределе 22
+  ⚠ ошибки и повторы — ошибок 1: №6 facts_get
+  ✓ неизвестные инструменты — все имена — из реестра
+
+Серверы (насчитал сервер / в трассе):
+  sources  pid 668  match_taxon 1/1, read_wikipedia 3/3, search_wikipedia 1/1, taxon_tree 1/1, vernacular_names 1/1
+  daemon   pid 12736  facts_get 1/1, mdd_get 1/1, mdd_search 1/1
+  notes    pid 12416  nb_add 3/3, nb_close 1/1, nb_open 1/1
+
+Файл: examples/flow/notes/hyaena-hyaena-nb-a9f96a4de707.md
+  # Полосатая гиена — паспорт вида
+  
+  Вид: *Hyaena hyaena*
+  
+  ## Таксономия
+  
+  **Русское название:** Полосатая гиена
+  **Латинское название:** *Hyaena hyaena* (Linnaeus, 1758)
+  
+  **Положение в системе (MDD v2.5, 2026-07-28):**
+  - Отряд: Carnivora (хищные)
+  - Семейство: Hyaenidae (гиеновые)
+  - Подсемейство: Hyaeninae
+  - Род: *Hyaena*
+  - Вид: *Hyaena hyaena*
+  - Автор описания: (Linnaeus, 1758)
+  - Статус МСОП: NT (близ …[обрезано]
+
+Итог модели: Блокнот о виде «полосатая гиена» (Hyaena hyaena) закрыт и записан в файл:
+examples/flow/notes/hyaena-hyaena-nb-a9f96a4de707.md (3 раздела, 8950 байт, sha256 41099a70e1af6cec115be110d958642d43493af5578b8742d0bb093fdbba5a17).
+
+Что вошло:
+1. «Таксономия» — систематика из MDD (отряд Carnivora, семейство Hyaenidae, подсемейство Hyaeninae, род Hyaena, автор (Linnaeus, 1758), статус МСОП NT, типовое местонахождение India), сверка с GBIF (usage_key 5218777, ACCEPTED, 99%), дерево классификации GBIF, русское народное название и распространение по странам/областям. Cites: mdd_search, mdd_get, match_taxon, taxon_tree, vernacular_names.
+2. «Описание» — ареал, внешний вид и образ жизни/поведение из разделов статьи Википедии. Cites: read_wikipedia.
+3. «Интересные факты» — выпуска демона об этом виде ещё не было (facts_get вернул ошибку — нормальный ответ), поэтому факты взяты из статьи Википедии, плюс статус МСОП из MDD. Cites: facts_get, read_wikipedia, mdd_get.
+
+Среди ссылок присутствуют и Википедия/GBIF, и MDD.
+
+Цена: $0.0041, токенов 95639 (кэш 86144), время 21.6s
+Итог: ✓ флоу пройден

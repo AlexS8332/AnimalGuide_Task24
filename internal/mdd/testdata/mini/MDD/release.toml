@@ -1,0 +1,9 @@
+[metadata]
+name = "The Mammal Diversity Database"
+version = "v2.5"
+release_date = "2026-07-28"
+mdd_file = "MDD_v2.5_6904species.csv"
+synonym_file = "Species_Syn_v2.5.csv"
+# Optional notes
+zenodo_citation = "Mammal Diversity Database. (2026). Mammal Diversity Database (Version 2.5) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.21654811"
+remarks = "This is an incremental release that documents 6,904 total species, of which 113 are recently extinct (same as previous version) and 6,791 are extant (17 domestic extant, 6,774 wild extant)."

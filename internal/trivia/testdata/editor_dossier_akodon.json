@@ -1,0 +1,130 @@
+{
+  "pick": {
+    "id": 0,
+    "species_id": 1002423,
+    "sci_name": "Akodon surdus",
+    "iucn": "VU",
+    "picked_at": "2026-09-24T10:00:00Z",
+    "attempts": 1,
+    "eligibility": {
+      "species_id": 1002423,
+      "sci_name": "Akodon surdus",
+      "checked_at": "2026-09-24T10:00:00Z",
+      "ok": true,
+      "wiki_lang": "en",
+      "wiki_title": "Silent grass mouse",
+      "wiki_url": "https://en.wikipedia.org/wiki/Silent_grass_mouse",
+      "gbif_key": 2438621,
+      "occurrences": 143
+    },
+    "weights": null
+  },
+  "species": {
+    "id": 1002423,
+    "sci_name": "Akodon surdus",
+    "common_name": "Silent Grass Mouse",
+    "other_common_names": [
+      "Slate-bellied Akodont"
+    ],
+    "order": "Rodentia",
+    "family": "Cricetidae",
+    "subfamily": "Sigmodontinae",
+    "genus": "Akodon",
+    "epithet": "surdus",
+    "authority": "O. Thomas, 1917",
+    "year": 1917,
+    "iucn": "VU",
+    "extinct": false,
+    "domestic": false,
+    "countries": [
+      "Peru"
+    ],
+    "continents": [
+      "South America"
+    ],
+    "realms": [
+      "Neotropic"
+    ],
+    "type_locality": "\"[Hacienda] Huadquiña, 5000 ft [= 1524 m],\" southern margin of the Urubamba River, Santa Teresa, Cusco, Peru."
+  },
+  "materials": [
+    {
+      "id": "S1",
+      "kind": "mdd",
+      "title": "Mammal Diversity Database: Akodon surdus",
+      "url": "https://www.mammaldiversity.org/taxon/1002423/",
+      "text": "Akodon surdus O. Thomas, 1917.\nАнглийское название: Silent Grass Mouse (также Slate-bellied Akodont).\nОтряд Rodentia, семейство Cricetidae, подсемейство Sigmodontinae.\nСтатус МСОП: VU.\nСтраны: Peru.\nБиогеографическая область: Neotropic.\nТиповое местонахождение: \"[Hacienda] Huadquiña, 5000 ft [= 1524 m],\" southern margin of the Urubamba River, Santa Teresa, Cusco, Peru.",
+      "tool": "mdd_get"
+    },
+    {
+      "id": "S2",
+      "kind": "wikipedia",
+      "title": "Wikipedia: Silent grass mouse — intro",
+      "url": "https://en.wikipedia.org/wiki/Silent_grass_mouse",
+      "text": "The silent grass mouse or slate-bellied akodont (Akodon surdus) is a species of rodent in the family Cricetidae. It is endemic to Peru.",
+      "tool": "read_wikipedia"
+    },
+    {
+      "id": "S3",
+      "kind": "wikipedia",
+      "title": "Wikipedia: Silent grass mouse — Distribution and habitat",
+      "url": "https://en.wikipedia.org/wiki/Silent_grass_mouse#Distribution_and_habitat",
+      "text": "The silent grass mouse lives primarily in the Cusco Region in the south east of Peru at altitudes of between 1,500 and 3,000m. Its habitat is generally confined to humid montane forests and it can also persist in selectively logged areas.",
+      "tool": "read_wikipedia"
+    },
+    {
+      "id": "S4",
+      "kind": "wikipedia",
+      "title": "Wikipedia: Silent grass mouse — Threats",
+      "url": "https://en.wikipedia.org/wiki/Silent_grass_mouse#Threats",
+      "text": "The grass mouse is listed as a vulnerable species on the IUCN Red List and its numbers are thought to be decreasing. This is mainly due to human settlement, commercial clearcutting and farmland creation which is degrading and declining the Andean forests where the grass mouse lives.",
+      "tool": "read_wikipedia"
+    },
+    {
+      "id": "S5",
+      "kind": "gbif",
+      "title": "GBIF: наблюдения Akodon surdus (пример, числа выдуманы)",
+      "url": "https://www.gbif.org/species/2438621",
+      "text": "Наблюдения GBIF по Akodon surdus: всего 143 записей; за последние 365 дней — 4.\nПо странам за всё время: Peru 139, Bolivia 4 (вне ареала MDD).\nЗа последние 365 дней: Peru 4.\nСтраны вне ареала MDD: Bolivia (4).",
+      "tool": "gbif occurrence facet"
+    }
+  ],
+  "observations": {
+    "gbif_key": 2438621,
+    "total": 143,
+    "window_days": 365,
+    "recent": 4,
+    "by_country": [
+      {
+        "code": "PE",
+        "name": "Peru",
+        "count": 139,
+        "range": "in"
+      },
+      {
+        "code": "BO",
+        "name": "Bolivia",
+        "count": 4,
+        "range": "out"
+      }
+    ],
+    "recent_by_country": [
+      {
+        "code": "PE",
+        "name": "Peru",
+        "count": 4,
+        "range": "in"
+      }
+    ],
+    "out_of_range": [
+      {
+        "code": "BO",
+        "name": "Bolivia",
+        "count": 4,
+        "range": "out"
+      }
+    ]
+  },
+  "collected_at": "2026-09-24T10:00:00Z",
+  "took": 3100000000
+}

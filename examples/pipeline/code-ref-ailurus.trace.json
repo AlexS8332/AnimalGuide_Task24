@@ -1,0 +1,135 @@
+{
+  "request": {
+    "query": "Ailurus fulgens",
+    "format": "json",
+    "pass": "ref"
+  },
+  "mode": "code",
+  "steps": [
+    {
+      "n": 1,
+      "tool": "search",
+      "status": "ok",
+      "args": {
+        "query": "Ailurus fulgens"
+      },
+      "kind": "dossier",
+      "digest": "sha256:5f0e8f8466e0a0cb395dff8b849158fdb0bbc9a3f30a65541352f6a6e745d27f",
+      "summary": "Малая панда (Ailurus fulgens): 7 материалов, 791 наблюдение GBIF",
+      "bytes": 18110,
+      "started": "2026-09-25T13:25:05.4257621+03:00",
+      "took": 1428209600,
+      "checks": [
+        {
+          "name": "ответ — конверт",
+          "ok": true
+        },
+        {
+          "name": "вид данных",
+          "ok": true,
+          "note": "dossier"
+        },
+        {
+          "name": "отпечаток ответа",
+          "ok": true,
+          "note": "5f0e8f8466e0"
+        }
+      ]
+    },
+    {
+      "n": 2,
+      "tool": "summarize",
+      "status": "ok",
+      "args": {
+        "ref": "sha256:5f0e8f8466e0a0cb395dff8b849158fdb0bbc9a3f30a65541352f6a6e745d27f"
+      },
+      "kind": "facts",
+      "digest": "sha256:38d03acc4fcd6bf4825cef494fcfd0ef79058504d6c3da74fa5afe0b5344cef2",
+      "input": "sha256:5f0e8f8466e0a0cb395dff8b849158fdb0bbc9a3f30a65541352f6a6e745d27f",
+      "summary": "Малая панда (Ailurus fulgens): 5 фактов подтверждено из 5",
+      "cost_usd": 0.0016806199999999999,
+      "bytes": 6555,
+      "started": "2026-09-25T13:25:06.8568265+03:00",
+      "took": 3344467500,
+      "checks": [
+        {
+          "name": "ответ — конверт",
+          "ok": true
+        },
+        {
+          "name": "вид данных",
+          "ok": true,
+          "note": "facts"
+        },
+        {
+          "name": "отпечаток ответа",
+          "ok": true,
+          "note": "38d03acc4fcd"
+        },
+        {
+          "name": "вход = выход шага 1",
+          "ok": true,
+          "note": "5f0e8f8466e0"
+        }
+      ]
+    },
+    {
+      "n": 3,
+      "tool": "save_to_file",
+      "status": "ok",
+      "args": {
+        "format": "json",
+        "ref": "sha256:38d03acc4fcd6bf4825cef494fcfd0ef79058504d6c3da74fa5afe0b5344cef2"
+      },
+      "kind": "file",
+      "digest": "sha256:95596b90327eb3f43464b7e1ad8dd0cecb245020b10fb9ca6995c07897f0cc0d",
+      "input": "sha256:38d03acc4fcd6bf4825cef494fcfd0ef79058504d6c3da74fa5afe0b5344cef2",
+      "summary": "exports/ailurus-fulgens-20260925-132510.json, 9.3 КБ",
+      "bytes": 2851,
+      "started": "2026-09-25T13:25:10.2022497+03:00",
+      "took": 25686700,
+      "checks": [
+        {
+          "name": "ответ — конверт",
+          "ok": true
+        },
+        {
+          "name": "вид данных",
+          "ok": true,
+          "note": "file"
+        },
+        {
+          "name": "отпечаток ответа",
+          "ok": true,
+          "note": "95596b90327e"
+        },
+        {
+          "name": "вход = выход шага 2",
+          "ok": true,
+          "note": "38d03acc4fcd"
+        },
+        {
+          "name": "цепочка в файле",
+          "ok": true,
+          "note": "5f0e8f8466e0 → 38d03acc4fcd"
+        }
+      ]
+    }
+  ],
+  "ok": true,
+  "file": {
+    "path": "exports/ailurus-fulgens-20260925-132510.json",
+    "format": "json",
+    "bytes": 9519,
+    "sha256": "c57e18145df66aa8813aeb8c03124cd089081d7fe1f2c93f504873d0790bbe8d",
+    "chain": [
+      "sha256:5f0e8f8466e0a0cb395dff8b849158fdb0bbc9a3f30a65541352f6a6e745d27f",
+      "sha256:38d03acc4fcd6bf4825cef494fcfd0ef79058504d6c3da74fa5afe0b5344cef2"
+    ],
+    "preview": "{\n  \"issue\": {\n    \"id\": 0,\n    \"pick_id\": 0,\n    \"species_id\": 1005802,\n    \"sci_name\": \"Ailurus fulgens\",\n    \"name_ru\": \"Малая панда\",\n    \"iucn\": \"EN\",\n    \"order\": \"Carnivora\",\n    \"family\": \"Ailuridae\",\n    \"realms\": [\n      \"Palearctic\"\n    ],\n    \"created_at\": \"2026-09-25T13:25:06.8628593+03:00\",\n    \"status\": \"ok\",\n    \"title\": \"Малая панда: рыжий хищник с «шестым пальцем»\",\n    \"lead\": \"Малая панда (Ailurus fulgens) — млекопитающее из семейства пандовых, обитающее в Бутане, Китае, Индии и Непале. По размеру она примерно соответствует крупным особям домашней кошки.\",\n    \"facts\": [\n      {\n        \"text\": \"Хотя малая панда относится к отряду хищных, 95 % её рациона составляют молодые листья и побеги бамбука; в сутки ей нужно съедать более 1,5 кг листьев и 4 кг молодых побегов бамбука.\",\n        \"sources\": [\n          \"S4\"\n        ]\n      },\n      {\n        \"text\": \"На передних лапах у малой панды есть «шестой (большой) палец» — на самом деле видоизменённая сесамовидная кость запястья, которая помогает ловко лазать по веткам и управляться с тонкими побегами бамбука.\",\n        \"sources\": [\n          \"S3\"\n        ]\n      },\n      {\n        \"text\": \"Рисунок вокруг глаз в виде маски, как у енотов, уникален для каждой отдельной особи.\",\n        \"sources\": [\n          \"S3\"\n        ]\n      },\n      {\n        \"text\": \"В спокойном состоянии малые панды издают короткие звуки, напоминающие птичье щебетание.\",\n        \"sources\": [\n          \"S4\"\n        ]\n      },\n      {\n       …"
+  },
+  "cost_usd": 0.0016806199999999999,
+  "took": 4802740600,
+  "started": "2026-09-25T13:25:05.4257621+03:00",
+  "finished": "2026-09-25T13:25:10.2285027+03:00"
+}
