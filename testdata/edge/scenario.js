@@ -77,7 +77,7 @@
 
     await check('пульт: список диалогов и выбранный', () => {
       const opts = qa('#dialog-select option');
-      assert(opts.length === 3, 'диалогов в списке ' + opts.length);
+      assert(opts.length === 4, 'диалогов в списке ' + opts.length);
       assert($('dialog-select').value === app.conv.id, 'выбран не текущий диалог');
     });
 
@@ -1320,11 +1320,11 @@
 
     await check('спросить v23: режимы: флажки, по умолчанию norag и rag, рядом не больше трёх', async () => {
       const boxes = qa('#kb-ask-modes [data-kb-mode]');
-      assert(boxes.map(x => x.dataset.kbMode).join(',') === 'norag,rag,rag+filter,rag+rewrite,rag+both', 'режимы: ' + boxes.map(x => x.dataset.kbMode));
+      assert(boxes.map(x => x.dataset.kbMode).join(',') === 'norag,rag,rag+filter,rag+rewrite,rag+both,rag+cite', 'режимы: ' + boxes.map(x => x.dataset.kbMode));
       assert(boxes.filter(x => x.checked).map(x => x.dataset.kbMode).join(',') === 'norag,rag', 'по умолчанию');
       kbSetModes('kb-ask-modes', ['norag', 'rag', 'rag+both']);
       const off = qa('#kb-ask-modes [data-kb-mode]').filter(x => x.disabled).map(x => x.dataset.kbMode);
-      assert(off.join(',') === 'rag+filter,rag+rewrite', 'четвёртый режим не выключен: ' + off);
+      assert(off.join(',') === 'rag+filter,rag+rewrite,rag+cite', 'четвёртый режим не выключен: ' + off);
       // Последний флажок не снимается.
       kbSetModes('kb-ask-modes', ['rag']);
       click(q('#kb-ask-modes [data-kb-mode="rag"]'));
@@ -1892,6 +1892,297 @@
     click('#kb-ask-go');
     await until('ответы', () => q('#kb-answers') && !$('kb-ask-go').disabled, 8000);
     $('window-body').scrollTop = 0;
+    await sleep(200);
+  };
+
+  // ===== v24: ответ с источниками и цитатами =====
+
+  /* REST — тот же kbapi; rag+cite — заготовка edge_cite_test: «чем питается
+     манул» — два источника и две цитаты из настоящих чанков, проверка
+     пройдена, судья подтвердил; фосса — «не знаю» решил код; «сколько весит
+     манул» — две попытки отклонены, «не проверено». Чат — диалог из трёх
+     ответов ведущего текстом kb_answer: с источниками, «не знаю» и с
+     разметкой из корпуса. */
+  const kbNormQ = s => String(s).toLowerCase().replace(/ё/g, 'е').replace(/[«»„“”"]/g, '"').replace(/[‐‑‒–—―−]/g, '-').replace(/\s+/g, ' ').trim();
+  const kbBadge = (scope, k) => q(`${scope} .kb-check-badge[data-check="${k}"]`);
+  const kbCiteScope = '.kb-answer[data-mode="rag+cite"] div.kb-cited';
+  async function kbCiteAsk(modes, qtext) {
+    kbSetModes('kb-ask-modes', modes);
+    $('kb-ask-q').value = qtext;
+    $('kb-ask-q').dispatchEvent(new Event('input', { bubbles: true }));
+    return kbAskGo(qtext);
+  }
+  // kbQuoteOpened — после клика по цитате: вкладка «Чанки» на её чанке,
+  // подсветка внутри него совпадает с цитатой и видна.
+  async function kbQuoteOpened(id, quote) {
+    const doc = id.split('/')[0];
+    await until('чанк с подсветкой', () => q(`#kb-text[data-doc="${doc}"][data-index="structure"] .kb-chunk.focus[data-id="${id}"] mark.kb-qmark`), 8000);
+    assert(q('[data-kb-tab="chunks"]').classList.contains('active') && $('kb-doc').value === doc, 'вкладка и документ');
+    const marks = qa('#kb-text mark.kb-qmark');
+    assert(marks.every(m => m.closest('.kb-chunk.focus')), 'подсветка вне чанка цитаты');
+    const got = kbNormQ(marks.map(m => m.textContent).join(' '));
+    assert(got === kbNormQ(quote), 'подсвечено «' + got + '», а цитата «' + kbNormQ(quote) + '»');
+    // Прокрутка — после загрузки документа: чанк из кэша рисуется сразу.
+    await until('подсветка в виду', () => {
+      const m = q('#kb-text mark.kb-qmark');
+      const r = m.getBoundingClientRect(), w = $('window-body').getBoundingClientRect();
+      return r.bottom > w.top && r.top < w.bottom;
+    }, 3000);
+  }
+
+  scenarios['kb-cite'] = async () => {
+    spyFetch();
+    await booted();
+    window.__xss = undefined;
+    let quotes = [];
+
+    await check('цитаты: режим rag+cite в выборе и рядом с rag', async () => {
+      await openKB();
+      await kbTabOpen('ask', '#kb-ask-pick optgroup');
+      assert(q('#kb-ask-modes [data-kb-mode="rag+cite"]'), 'нет флажка rag+cite');
+      const body = await kbCiteAsk(['rag', 'rag+cite'], 'Чем питается манул?');
+      assert(body.modes.join(',') === 'rag,rag+cite', 'тело: ' + JSON.stringify(body));
+      assert(qa('#kb-answers .kb-answer').map(x => x.dataset.mode).join(',') === 'rag,rag+cite', 'колонки');
+      assert(text('.kb-answer[data-mode="rag+cite"] .kb-answer-head').includes('RAG + источники и цитаты'), 'заголовок: ' + text('.kb-answer[data-mode="rag+cite"] .kb-answer-head'));
+      assert(!q('.kb-answer[data-mode="rag"] div.kb-cited'), 'блок цитат у rag');
+    });
+
+    await check('цитаты: ответ, два источника «статья › раздел» с chunk_id', async () => {
+      const box = q(kbCiteScope + '[data-status="answered"]');
+      assert(box && box.dataset.ok === '1', 'нет блока ответа с цитатами');
+      assert(text(kbCiteScope + ' .kb-cited-answer').includes('мелкими грызунами и пищухами'), 'ответ: ' + text(kbCiteScope + ' .kb-cited-answer'));
+      const src = qa(kbCiteScope + ' .kb-cited-src');
+      assert(src.length === 2, 'источников ' + src.length);
+      assert(src[0].textContent.replace(/\s+/g, ' ').includes('[1] Манул › Охота и питание'), 'источник 1: ' + src[0].textContent);
+      assert(src[1].textContent.replace(/\s+/g, ' ').includes('[2] Манул › Поведение'), 'источник 2: ' + src[1].textContent);
+      src.forEach(s => assert(/^manul\/structure\/\d{3}$/.test(s.dataset.chunk) && s.querySelector('code').textContent === s.dataset.chunk, 'chunk_id: ' + s.dataset.chunk));
+      assert(qa('.kb-answer[data-mode="rag+cite"] .kb-src.cited').length === 2, 'фрагменты-источники не помечены в выдаче');
+    });
+
+    await check('цитаты: курсивом, с номером источника', async () => {
+      quotes = qa(kbCiteScope + ' .kb-quote');
+      assert(quotes.length === 2, 'цитат ' + quotes.length);
+      assert(quotes.map(x => x.dataset.src).join(',') === '1,2', 'номера источников: ' + quotes.map(x => x.dataset.src));
+      quotes.forEach(x => {
+        assert(x.querySelector('i.kb-quote-t') && getComputedStyle(x.querySelector('i.kb-quote-t')).fontStyle === 'italic', 'не курсив');
+        assert(x.dataset.verbatim === '1' && !x.classList.contains('bad'), 'помечена не дословной');
+      });
+      assert(quotes[0].dataset.quote.includes('грызунами') && quotes[1].dataset.quote.includes('сумерк'), 'цитаты: ' + quotes.map(x => x.dataset.quote));
+      assert(quotes[0].querySelector('.kb-cited-n').textContent === '[1]', 'номер у цитаты');
+    });
+
+    await check('цитаты: бейджи проверки кодом и судья смысла', async () => {
+      const s = kbCiteScope;
+      for (const k of ['sources', 'quotes', 'verbatim', 'numbers']) {
+        const b = kbBadge(s, k);
+        assert(b && b.classList.contains('ok') && b.dataset.ok === '1', 'бейдж ' + k + ': ' + (b && b.textContent));
+      }
+      assert(kbBadge(s, 'sources').textContent === 'источники ✓' && kbBadge(s, 'quotes').textContent === 'цитаты ✓', 'надписи');
+      assert(kbBadge(s, 'verbatim').textContent === 'дословно 2 из 2', 'дословно: ' + kbBadge(s, 'verbatim').textContent);
+      assert(kbBadge(s, 'numbers').textContent === 'числа в цитатах ✓', 'числа: ' + kbBadge(s, 'numbers').textContent);
+      assert(!kbBadge(s, 'unverified') && !kbBadge(s, 'rejects'), 'лишние бейджи отказов');
+      const claims = qa(s + ' .kb-claim');
+      assert(claims.length === 2 && claims.every(c => c.dataset.supported === '1'), 'утверждения: ' + claims.map(c => c.textContent));
+      assert(claims[0].textContent.includes('подтверждено цитатой №1') && claims[1].textContent.includes('подтверждено цитатой №2'), 'номера цитат судьи');
+      assert(text(s + ' .kb-support .kb-cited-h').includes('подтверждено 2 из 2'), 'итог судьи: ' + text(s + ' .kb-support .kb-cited-h'));
+    });
+
+    await check('цитаты: клик по цитате — чанк с подсветкой процитированного', async () => {
+      const id = quotes[0].dataset.chunk, quote = quotes[0].dataset.quote;
+      click(quotes[0]);
+      await kbQuoteOpened(id, quote);
+      await kbTabOpen('ask', '#kb-answers');
+      const q2 = qa(kbCiteScope + ' .kb-quote')[1];
+      click(q2);
+      await kbQuoteOpened(q2.dataset.chunk, q2.dataset.quote);
+      assert(text('#kb-text .kb-chunk.focus mark.kb-qmark').includes('сумерк'), 'вторая цитата');
+    });
+
+    await check('цитаты: клик по источнику — чанк без подсветки', async () => {
+      await kbTabOpen('ask', '#kb-answers');
+      const s = q(kbCiteScope + ' .kb-cited-src');
+      click(s);
+      await until('чанк', () => q(`#kb-text .kb-chunk.focus[data-id="${s.dataset.chunk}"]`), 8000);
+      assert(!q('#kb-text mark.kb-qmark'), 'подсветка от прошлой цитаты осталась');
+    });
+
+    await check('«не знаю»: решил код — плашка, уточняющий вопрос, пометка', async () => {
+      await kbTabOpen('ask', '#kb-answers');
+      await kbCiteAsk(['rag+cite'], 'Сколько весит фосса?');
+      const box = q(kbCiteScope + '[data-status="unknown"]');
+      assert(box && box.dataset.forced === '1', 'нет плашки «не знаю» с Forced');
+      assert(q(kbCiteScope + ' .kb-unknown') && text(kbCiteScope + ' .kb-unknown').startsWith('Не знаю'), 'плашка: ' + text(kbCiteScope + ' .kb-unknown'));
+      assert(text(kbCiteScope + ' .kb-clarify').includes('Уточните:') && text(kbCiteScope + ' .kb-clarify').includes('манул или харза'), 'уточнение: ' + text(kbCiteScope + ' .kb-clarify'));
+      assert(text(kbCiteScope + ' .kb-forced').includes('решил код: релевантность ниже порога'), 'пометка: ' + text(kbCiteScope + ' .kb-forced'));
+      assert(!q(kbCiteScope + ' .kb-cited-src') && !q(kbCiteScope + ' .kb-quote') && !kbBadge(kbCiteScope, 'sources'), 'источники у «не знаю»');
+    });
+
+    await check('«не проверено»: после двух отказов — бейджи и не дословная цитата', async () => {
+      await kbCiteAsk(['rag+cite'], 'Сколько весит манул?');
+      const s = kbCiteScope;
+      assert(q(s + '[data-unverified="1"]'), 'нет пометки на блоке');
+      assert(kbBadge(s, 'unverified').textContent === 'не проверено' && kbBadge(s, 'unverified').classList.contains('bad'), 'не проверено');
+      assert(kbBadge(s, 'rejects').textContent === 'отказов: 2', 'отказы: ' + kbBadge(s, 'rejects').textContent);
+      assert(kbBadge(s, 'verbatim').textContent === 'дословно 1 из 2' && kbBadge(s, 'verbatim').classList.contains('bad'), 'дословно: ' + kbBadge(s, 'verbatim').textContent);
+      assert(kbBadge(s, 'numbers').textContent === 'числа в цитатах ⚠ 6' && kbBadge(s, 'numbers').classList.contains('warn'), 'числа: ' + kbBadge(s, 'numbers').textContent);
+      const qs = qa(s + ' .kb-quote');
+      assert(qs.length === 2 && qs[1].dataset.verbatim === '0' && qs[1].textContent.includes('не дословно') && qs[0].dataset.verbatim === '1', 'цитаты');
+      assert(text(s + ' .kb-problems summary').includes('2'), 'замечания: ' + text(s + ' .kb-problems summary'));
+      assert(!q(s + ' .kb-support'), 'судья в «Спросить»');
+      click(qs[1]);
+      await until('чанк', () => q(`#kb-text .kb-chunk.focus[data-id="${qs[1].dataset.chunk}"]`), 8000);
+      assert(!q('#kb-text mark.kb-qmark') && text('#kb-text .kb-chunk.focus .kb-qmiss') === 'цитата не найдена', 'не дословная цитата подсвечена');
+    });
+
+    await check('контрольные: столбцы проверки rag+cite и сводка', async () => {
+      await kbTabOpen('qa', '#kb-qa-table .kb-qa-row');
+      await kbQaStart(1, true, ['rag', 'rag+cite']);
+      await until('итог', () => q('#kb-qa-summary'), 20000);
+      const heads = qa('#kb-qa-table th.kb-qa-c').map(x => x.dataset.check + ':' + x.textContent);
+      assert(heads.join(',') === 'sources:источники,quotes:цитаты,verbatim:дословно,support:смысл,unknown:не знаю', 'столбцы: ' + heads);
+      const cell = (id, k) => kbRow(id).querySelector(`.kb-qa-c[data-check="${k}"]`);
+      const row = id => ['sources', 'quotes', 'verbatim', 'support', 'unknown'].map(k => cell(id, k).textContent).join('');
+      assert(row('T01') === '✓✓✓✓—', 'T01: ' + row('T01'));
+      assert(row('T02') === '✓✓✓✗—', 'T02 (смысл): ' + row('T02'));
+      assert(row('T04') === '✓✓✗✓—' && cell('T04', 'verbatim').title.includes('дословно 1 из 2') && cell('T04', 'sources').title.includes('не проверено'), 'T04: ' + row('T04') + ' ' + cell('T04', 'verbatim').title);
+      assert(row('T09') === '————✓' && cell('T09', 'unknown').title.includes('решила модель'), 'T09: ' + row('T09'));
+      assert(row('T10') === '————✓' && cell('T10', 'unknown').title.includes('решил код'), 'T10: ' + row('T10'));
+      for (const k of ['with_sources', 'with_quotes', 'verbatim', 'supported', 'unverified', 'forced_unknown', 'false_unknown']) {
+        const tr = q(`#kb-qa-stats tr[data-metric="${k}"]`);
+        assert(tr, 'нет строки сводки ' + k);
+        const v = tr.querySelector('td[data-mode="rag+cite"]').textContent;
+        assert(v === '—' || /^\d/.test(v), k + ': ' + v);
+        assert(tr.querySelector('td[data-mode="rag"]').textContent === '—', k + ' у rag: ' + tr.querySelector('td[data-mode="rag"]').textContent);
+      }
+    });
+
+    await check('контрольные: раскрытая строка — блок цитат и «не знаю»', async () => {
+      click(kbRow('T10').querySelector('.kb-qa-q'));
+      await until('раскрыто', () => q('.kb-qa-detail[data-id="T10"]'));
+      assert(q('.kb-qa-detail[data-id="T10"] .kb-answer[data-mode="rag+cite"] div.kb-cited[data-status="unknown"][data-forced="1"] .kb-clarify'), 'T10 без плашки');
+      click(kbRow('T01').querySelector('.kb-qa-q'));
+      await until('раскрыто', () => q('.kb-qa-detail[data-id="T01"]'));
+      const d = q('.kb-qa-detail[data-id="T01"] .kb-answer[data-mode="rag+cite"]');
+      assert(d.querySelectorAll('.kb-quote').length === 2 && d.querySelectorAll('.kb-claim[data-supported="1"]').length >= 1, 'T01 без цитат и судьи');
+      assert(q('.kb-qa-detail[data-id="T01"] td').colSpan === 5 + 2 + 1 + 5, 'colspan ' + q('.kb-qa-detail[data-id="T01"] td').colSpan);
+    });
+
+    await check('цитаты: из данных ни одного элемента и кода', async () => {
+      assert(!q('#kb-root script') && !q('#kb-root img'), 'элемент из данных');
+      await sleep(100);
+      assert(window.__xss === undefined, 'исполнился код: __xss=' + window.__xss);
+    });
+  };
+
+  // Чат: ответы ведущего kb_answer.
+  const citeTurn = n => qa('#feed .turn')[n];
+  scenarios['chat-cite'] = async () => {
+    spyFetch();
+    await booted();
+    window.__xss = undefined;
+    await until('три хода', () => qa('#feed .turn').length === 3, 8000);
+
+    await check('чат: источники — чипы «[1] Манул › Охота и питание»', async () => {
+      const b = citeTurn(0).querySelector('.bubble.reply.cited');
+      assert(b, 'ответ не распознан');
+      assert(b.querySelector('.reply-text').textContent.includes('мелкими грызунами'), 'текст: ' + b.textContent);
+      assert(!b.querySelector('.reply-text').textContent.includes('Источники') && !b.querySelector('.reply-text').textContent.includes('manul/structure'), 'источники остались в тексте');
+      const chips = [...b.querySelectorAll('.src-chip')];
+      assert(chips.length === 2, 'чипов ' + chips.length);
+      assert(chips[0].textContent === '[1] Манул › Охота и питание' && chips[1].textContent === '[2] Манул › Поведение', 'чипы: ' + chips.map(c => c.textContent));
+      chips.forEach(c => assert(/^manul\/structure\/\d{3}$/.test(c.dataset.chunk), 'chunk_id: ' + c.dataset.chunk));
+      assert(!b.querySelector('.reply-unknown'), 'плашка «не знаю» у ответа');
+    });
+
+    await check('чат: цитаты — раскрывающийся блок', async () => {
+      const d = citeTurn(0).querySelector('details.src-quotes');
+      assert(d && !d.open, 'блок раскрыт сразу');
+      assert(d.querySelector('summary').textContent.includes('2 цитаты'), 'заголовок: ' + d.querySelector('summary').textContent);
+      d.open = true;
+      const qs = [...d.querySelectorAll('.src-quote')];
+      assert(qs.length === 2 && qs[0].querySelector('i').textContent.includes('грызунами') && qs[1].querySelector('i').textContent.includes('сумерк'), 'цитаты: ' + qs.map(x => x.textContent));
+      assert(qs.map(x => x.dataset.n).join(',') === '1,2' && qs[0].dataset.chunk === citeTurn(0).querySelector('.src-chip').dataset.chunk, 'номера и chunk_id');
+    });
+
+    await check('чат: клик по чипу — «База знаний» на чанке с подсветкой цитаты', async () => {
+      const chip = citeTurn(0).querySelector('.src-chip');
+      const id = chip.dataset.chunk, quote = chip.dataset.quote;
+      assert(quote.includes('грызунами'), 'у чипа нет цитаты');
+      click(chip);
+      await until('окно', () => windowOpen() && $('window-title').textContent === 'База знаний', 8000);
+      await kbQuoteOpened(id, quote);
+      assert(factsCalls.some(x => x.url.endsWith('/api/kb/chunk/' + id.split('/').map(encodeURIComponent).join('/'))), 'не спросили /api/kb/chunk');
+      click(q('#window [data-action="closeWindow"]') || $('window').querySelector('button'));
+      await until('окно закрыто', () => !windowOpen());
+    });
+
+    await check('чат: клик по цитате тоже открывает чанк', async () => {
+      const d = citeTurn(0).querySelector('details.src-quotes');
+      d.open = true;
+      const b = d.querySelectorAll('.src-quote-open')[1];
+      click(b);
+      await kbQuoteOpened(b.dataset.arg, b.dataset.quote);
+      $('window').close();
+    });
+
+    await check('чат: «не знаю» — плашка и кнопка-уточнение, без отправки', async () => {
+      const b = citeTurn(1).querySelector('.bubble.reply.cited');
+      assert(b && b.querySelector('.reply-unknown'), 'нет плашки');
+      assert(b.querySelector('.reply-unknown').textContent.replace(/\s+/g, ' ').trim().startsWith('Не знаю: в базе знаний нет фрагментов'), 'плашка: ' + b.querySelector('.reply-unknown').textContent);
+      assert(b.querySelector('.reply-clarify-q').textContent.includes('Уточните: Какой вид из базы'), 'вопрос: ' + b.querySelector('.reply-clarify-q').textContent);
+      assert(!b.querySelector('.src-chip'), 'чипы у «не знаю»');
+      const turns = app.conv.turnList.length, posts = factsCalls.filter(x => x.method === 'POST').length;
+      $('composer-text').value = '';
+      click(b.querySelector('.reply-clarify'));
+      await sleep(300);
+      const ta = $('composer-text');
+      assert(ta.placeholder.includes('Какой вид из базы вас интересует') && ta.value === '', 'поле: «' + ta.value + '» / ' + ta.placeholder);
+      assert(document.activeElement === ta, 'поле не в фокусе');
+      assert(app.conv.turnList.length === turns && !app.live && factsCalls.filter(x => x.method === 'POST').length === posts, 'уточнение отправилось');
+    });
+
+    await check('чат: разметка из корпуса в чипах и цитатах — буквами', async () => {
+      const b = citeTurn(2).querySelector('.bubble.reply.cited');
+      assert(b, 'ответ не распознан');
+      const chip = b.querySelector('.src-chip');
+      assert(chip && chip.textContent.includes('<b>Ксенофоб</b>') && chip.textContent.includes('<i>Питание</i>'), 'чип: ' + (chip && chip.textContent));
+      b.querySelector('details.src-quotes').open = true;
+      assert(b.querySelector('.src-quote i').textContent.includes('<img src=x onerror="window.__xss=43">'), 'цитата: ' + b.querySelector('.src-quote').textContent);
+      assert(!q('#feed img') && !q('#feed script') && !q('#feed .src-chip b') && !q('#feed .src-quote i i'), 'элемент из данных в ленте');
+      click(chip);
+      await kbQuoteOpened(chip.dataset.chunk, chip.dataset.quote);
+      assert(!q('#kb-root img') && !q('#kb-root script'), 'элемент из данных в окне');
+      await sleep(100);
+      assert(window.__xss === undefined, 'исполнился код: __xss=' + window.__xss);
+    });
+
+    await check('чат: обычный ответ не тронут', async () => {
+      assert(!qa('#feed .bubble.reply:not(.cited)').some(b => b.querySelector('.src-chip, .reply-unknown')), 'чипы у обычного ответа');
+    });
+  };
+
+  scenarios['shot-kb-cite'] = async () => {
+    await booted();
+    await openKB();
+    await kbTabOpen('ask', '#kb-ask-pick optgroup');
+    kbSetModes('kb-ask-modes', ['rag+both', 'rag+cite']);
+    $('kb-ask-q').value = 'Чем питается манул?';
+    $('kb-ask-q').dispatchEvent(new Event('input', { bubbles: true }));
+    click('#kb-ask-go');
+    await until('ответы', () => q('#kb-answers div.kb-cited') && !$('kb-ask-go').disabled, 8000);
+    $('window-body').scrollTop = 0;
+    await sleep(200);
+  };
+  scenarios['shot-chat-cite'] = async () => {
+    await booted();
+    await until('три хода', () => qa('#feed .turn').length === 3, 8000);
+    await sleep(300);
+    const d = q('#feed details.src-quotes');
+    if (d) d.open = true;
+    // body прокручивается сам (стиль снимков), пульт сверху липкий: первый
+    // ход — сразу под ним.
+    const top = q('#feed .turn').getBoundingClientRect().top + document.body.scrollTop;
+    document.body.scrollTop = top - $('pult').getBoundingClientRect().height - 8;
     await sleep(200);
   };
 

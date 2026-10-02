@@ -197,7 +197,7 @@ func edgeModeConfig(m rag.Mode) retrieve.Config {
 		c.Filter = true
 	case rag.RAGRewrite:
 		c.Rewrite = retrieve.RewriteCode
-	case rag.RAGBoth:
+	case rag.RAGBoth, rag.RAGCite:
 		c.Rewrite, c.Filter = retrieve.RewriteCode, true
 	}
 	return c
