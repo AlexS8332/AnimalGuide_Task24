@@ -558,7 +558,9 @@ func render(c Cited, hits []kb.Hit) string {
 	}
 	if len(quotes) > 0 {
 		b.WriteString("\n\n**Цитаты:**\n")
-		b.WriteString(strings.Join(quotes, "\n>\n"))
+		// По цитате на строку: чат (web/app.js) разбирает цитаты построчно, и
+		// строка из одного «>» между ними стала бы пустой цитатой.
+		b.WriteString(strings.Join(quotes, "\n"))
 	}
 	return b.String()
 }
