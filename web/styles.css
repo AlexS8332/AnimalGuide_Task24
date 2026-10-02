@@ -617,7 +617,7 @@ table.kb-table td.best { font-weight: 700; color: var(--green); }
 .kb-src:hover { border-color: var(--green); }
 .kb-src.cited { border-left: 3px solid var(--green); }
 .kb-src .kb-hit-text { font-size: 12.5px; }
-.kb-cited { margin-left: auto; flex: none; white-space: nowrap; }
+.kb-hit-head .kb-cited { margin-left: auto; flex: none; white-space: nowrap; }
 .kb-prompt { font-size: 13px; }
 .kb-prompt summary { cursor: pointer; color: var(--muted); }
 .kb-prompt-cols { display: grid; grid-template-columns: repeat(var(--kb-cols, 2), minmax(0, 1fr)); gap: 12px; margin-top: 6px; }
@@ -756,3 +756,59 @@ tr.kb-cal-row.chosen td { background: var(--green-soft); }
   .kb-tr-q { grid-template-columns: minmax(0, 1fr); }
   .kb-tr-arrow { transform: rotate(90deg); justify-self: center; }
 }
+
+/* v24: ответ с источниками и цитатами (rag+cite) — окно «База знаний». */
+div.kb-cited { display: flex; flex-direction: column; gap: 7px; }
+.kb-check { display: flex; flex-wrap: wrap; gap: 4px; }
+.kb-check-badge { font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); background: #f4f0e6; white-space: nowrap; }
+.kb-check-badge.ok { color: var(--green); background: var(--green-soft); border-color: #b9d6c4; }
+.kb-check-badge.warn { color: var(--amber); background: var(--amber-soft); border-color: #e8d2a6; }
+.kb-check-badge.bad { color: var(--brick); background: var(--brick-soft); border-color: #e6bdb2; }
+.kb-cited-answer { font-size: 14px; }
+.kb-cited-ref { color: var(--green); font: 600 10.5px var(--mono); }
+.kb-cited-h { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: none; margin-bottom: 2px; }
+.kb-cited-h.bad { color: var(--brick); }
+.kb-cited-srcs, .kb-quotes { display: flex; flex-direction: column; gap: 4px; }
+.kb-cited-src { text-align: left; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding: 3px 8px; font-size: 13px; background: #fdfbf5; border-left: 3px solid var(--green); }
+.kb-cited-src code { font: 11px var(--mono); color: var(--muted); }
+.kb-cited-src.unknown { border-left-color: var(--brick); background: var(--brick-soft); }
+.kb-cited-n { font: 600 11.5px var(--mono); color: var(--green); }
+.kb-quote { text-align: left; padding: 5px 9px; font-size: 13px; background: #fbf8ef; border: 1px solid var(--line); border-left: 3px solid var(--amber); }
+.kb-quote.bad { border-left-color: var(--brick); }
+.kb-quote-t { font-family: var(--serif); font-size: 13.5px; }
+.kb-quote-n { font: 600 11px var(--mono); color: var(--muted); }
+.kb-support { border-top: 1px dashed var(--line); padding-top: 5px; }
+.kb-claims { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; font-size: 13px; }
+.kb-claim-mark { font-weight: 700; }
+.kb-claim.ok .kb-claim-mark { color: var(--green); }
+.kb-claim.bad .kb-claim-mark, .kb-claim.bad .kb-claim-v { color: var(--brick); }
+.kb-claim-v { font-size: 11.5px; color: var(--muted); }
+.kb-unknown { padding: 8px 11px; border-radius: 8px; border: 1px solid #c3d4e6; border-left: 5px solid var(--blue); background: var(--blue-soft); font-size: 13.5px; }
+.kb-unknown > b { color: var(--blue); }
+.kb-clarify { margin-top: 4px; font-weight: 600; }
+.kb-clarify-l { color: var(--blue); }
+.kb-forced { margin-top: 5px; font-size: 12px; }
+.kb-forced[data-forced="1"] { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--amber-soft); border: 1px solid #e8d2a6; color: #6f4a0f; font-weight: 600; }
+.kb-problems { font-size: 12px; color: var(--muted); }
+.kb-problems ul { margin: 3px 0 0; padding-left: 18px; }
+mark.kb-qmark { background: #ffe08a; color: inherit; border-radius: 2px; box-shadow: 0 0 0 1px #e8c45a; }
+.kb-qa-c { text-align: center; font-weight: 700; font-size: 14px; }
+.kb-qa-c.ok { color: var(--green); }
+.kb-qa-c.bad { color: var(--brick); }
+.kb-qa-c.na { color: var(--muted); font-weight: 400; }
+th.kb-qa-c { font-size: 12px; font-weight: 600; background: var(--amber-soft); }
+
+/* v24: ответ ведущего с источниками — лента чата. */
+.bubble.reply.cited { display: flex; flex-direction: column; gap: 7px; }
+.reply-text p:first-child { margin-top: 0; }
+.reply-text p:last-child { margin-bottom: 0; }
+.src-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.src-chip { font-size: 12px; padding: 2px 10px; border-radius: 999px; background: var(--green-soft); border: 1px solid #b9d6c4; color: #1f4a36; }
+.src-chip:hover { background: var(--green); border-color: var(--green); color: #fff; }
+.src-quotes { font-size: 13px; }
+.src-quotes summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.src-quote { margin: 5px 0 0; padding: 4px 10px; border-left: 3px solid var(--amber); background: #fbf8ef; font-family: var(--serif); }
+.src-quote-open { font: 600 11.5px var(--mono); }
+.reply-unknown { padding: 8px 11px; border-radius: 8px; border: 1px solid #c3d4e6; border-left: 5px solid var(--blue); background: var(--blue-soft); }
+.reply-unknown > b { color: var(--blue); }
+.reply-clarify-q { margin: 4px 0; font-weight: 600; }
