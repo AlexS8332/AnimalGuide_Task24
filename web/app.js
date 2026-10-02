@@ -328,7 +328,7 @@ function turnHTML(t, state, shown) {
   if (t.status === 'failed') {
     html += `<div class="bubble reply error">Ход не удался: ${esc(t.error)}</div>`;
   } else if (t.reply && !(t.route === 'card' && (t.cards || []).some(d => d.kind === 'card'))) {
-    html += `<div class="bubble reply">${md(t.reply)}</div>`;
+    html += replyHTML(t.reply);
   }
   html += chipsHTML(t);
   html += `<div class="turn-meta">
@@ -471,7 +471,7 @@ function liveHTML(state, shown) {
   } else if (v.error) {
     html += `<div class="bubble reply error">${esc(v.error)}</div>`;
   } else if (v.reply) {
-    html += `<div class="bubble reply">${md(v.reply)}</div>`;
+    html += replyHTML(v.reply);
   }
   html += `<div class="turn-meta"><span>${plural(v.totals.llmCalls, 'запрос', 'запроса', 'запросов')} к модели</span><span>${usd(v.totals.cost)}</span></div></div>`;
   return html;
@@ -2083,3 +2083,153 @@ Object.assign(actions, {
     await pipePoll();
   },
 });
+
+// ===== Ответ с источниками (v24) =====
+
+/* Механизм rag.cite: ведущий отвечает завершающим инструментом kb_answer, и
+   текст ответа собирает код (rag.CitedResult.Text) — markdown вида
+
+     Ответ по существу [1].
+
+     **Источники:** [1] Манул › Охота и питание (`manul/structure/008`); [2] …
+
+     **Цитаты:**
+     > «Кормится манул почти исключительно мелкими грызунами…» [1]
+
+   а у «не знаю» — строки «Не знаю: …» и «Уточните: …». Лента распознаёт
+   этот вид и рисует источники чипами .src-chip[data-chunk] под ответом
+   («[1] Манул › Охота и питание»), цитаты — раскрывающимся блоком
+   .src-quotes, «не знаю» — плашкой .reply-unknown с кнопкой-уточнением
+   (.reply-clarify: подставляет вопрос в поле ввода подсказкой, НЕ
+   отправляет). Клик по чипу или цитате — окно «База знаний» на этом чанке
+   с подсветкой цитаты (app.kbOpenCite из kb.js). Ответ без этих строк —
+   обычный markdown, как раньше. Всё из ответа — через esc(): заголовки
+   статей, разделы и цитаты пришли из корпуса и от модели. */
+
+// citeStrip — строка без выделения ** и маркера списка.
+function citeStrip(line) { return String(line).replace(/\*\*/g, '').replace(/^\s*(?:[-*•]\s+)/, '').trim(); }
+
+// citeUnquote — текст цитаты без обрамляющих кавычек и курсива.
+function citeUnquote(s) {
+  s = String(s).trim().replace(/^[*_]+|[*_]+$/g, '').trim();
+  if (/^[«"“„]/.test(s) && /[»"”]$/.test(s)) s = s.slice(1, -1);
+  return s.trim();
+}
+
+// citeParse — разбор ответа kb_answer: {body, sources[{n, label, id}],
+// quotes[{n, id, text}], unknown, clarify}; ответ не того вида — null.
+function citeParse(text) {
+  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  const head = re => lines.findIndex(l => re.test(citeStrip(l)));
+  const iSrc = head(/^Источники\s*:/i);
+  const iQ = head(/^Цитаты\s*:/i);
+  let unknown = null, clarify = '';
+  const body = [];
+  const end = [iSrc, iQ].filter(i => i >= 0);
+  const stop = end.length ? Math.min(...end) : lines.length;
+  for (let i = 0; i < stop; i++) {
+    const l = citeStrip(lines[i]);
+    let m;
+    if ((m = l.match(/^Не знаю\s*[:—–-]\s*(.*)$/i)) && unknown === null) unknown = m[1].trim();
+    else if ((m = l.match(/^Уточните\s*[:—–-]\s*(.*)$/i))) clarify = m[1].trim();
+    else body.push(lines[i]);
+  }
+  const sources = [];
+  if (iSrc >= 0) {
+    const part = lines.slice(iSrc, iQ > iSrc ? iQ : lines.length).map(citeStrip).join('\n').replace(/^Источники\s*:\s*/i, '');
+    const re = /\[(\d{1,2})\]\s*([^[\n]*?)\s*\(\s*`([^`\n]+)`\s*\)/g;
+    let m;
+    while ((m = re.exec(part))) sources.push({ n: Number(m[1]), label: m[2].replace(/[;,]\s*$/, '').trim(), id: m[3].trim() });
+    if (!sources.length) {
+      // Запасной вид: нумерованный список «1. Статья › Раздел (`id`)».
+      for (const l of part.split('\n')) {
+        const x = l.match(/^(\d{1,2})[.)]\s*(.*?)\s*\(\s*`([^`]+)`\s*\)/);
+        if (x) sources.push({ n: Number(x[1]), label: x[2].trim(), id: x[3].trim() });
+      }
+    }
+  }
+  const quotes = [];
+  if (iQ >= 0) {
+    for (let i = iQ + 1; i < lines.length; i++) {
+      const raw = lines[i].trim();
+      if (!raw) continue;
+      if (!/^(?:>|[-*•])/.test(raw)) break;
+      let l = raw.replace(/^(?:>\s*)+|^[-*•]\s+/, '').trim();
+      let n = 0, id = '';
+      let m = l.match(/^(.*?)\s*\(\s*`([^`]+)`\s*\)\s*$/);
+      if (m) { l = m[1]; id = m[2]; }
+      m = l.match(/^(.*?)\s*\[(\d{1,2})\]\s*$/);
+      if (m) { l = m[1]; n = Number(m[2]); }
+      const src = sources.find(s => (n && s.n === n) || (id && s.id === id));
+      if (src) { n = src.n; id = src.id; }
+      const t = citeUnquote(l);
+      if (t) quotes.push({ n, id, text: t });
+    }
+  }
+  if (!sources.length && unknown === null) return null;
+  return { body: body.join('\n').trim(), sources, quotes, unknown, clarify };
+}
+
+// citeReplyHTML — ответ kb_answer пузырём: плашка «не знаю», текст,
+// чипы источников, цитаты; не тот вид — null.
+function citeReplyHTML(text) {
+  const p = citeParse(text);
+  if (!p) return null;
+  let html = '';
+  if (p.unknown !== null) {
+    html += `<div class="reply-unknown"><b>Не знаю</b>${p.unknown ? ': ' + esc(p.unknown) : ''}
+      ${p.clarify ? `<div class="reply-clarify-q">Уточните: ${esc(p.clarify)}</div>
+        <button type="button" class="small reply-clarify" data-action="citeClarify" data-arg="${esc(p.clarify)}" title="подставить вопрос в поле ввода подсказкой — отправлять не будет">уточнить ↓</button>` : ''}</div>`;
+  }
+  if (p.body) html += `<div class="reply-text">${md(p.body)}</div>`;
+  if (p.sources.length) {
+    html += `<div class="src-chips" aria-label="источники ответа">${p.sources.map(s => {
+      const q = p.quotes.find(x => x.id === s.id);
+      return `<button type="button" class="src-chip" data-chunk="${esc(s.id)}" data-n="${esc(s.n)}" data-action="citeOpen" data-arg="${esc(s.id)}" data-quote="${esc(q ? q.text : '')}" title="${esc(s.id + ' — открыть фрагмент в окне «База знаний»')}">[${esc(s.n)}] ${esc(s.label || s.id)}</button>`;
+    }).join('')}</div>`;
+  }
+  if (p.quotes.length) {
+    html += `<details class="src-quotes"><summary>${esc(plural(p.quotes.length, 'цитата', 'цитаты', 'цитат'))} из базы знаний</summary>${p.quotes.map(x =>
+      `<blockquote class="src-quote" data-chunk="${esc(x.id)}" data-n="${esc(x.n)}"><i>«${esc(x.text)}»</i>${x.id ? ` <button type="button" class="link src-quote-open" data-action="citeOpen" data-arg="${esc(x.id)}" data-quote="${esc(x.text)}" title="открыть фрагмент с подсветкой цитаты">[${esc(x.n || '?')}]</button>` : ''}</blockquote>`).join('')}</details>`;
+  }
+  return html;
+}
+
+// replyHTML — пузырь ответа: kb_answer — с источниками, иначе markdown.
+function replyHTML(text) {
+  const c = citeReplyHTML(text);
+  return c === null ? `<div class="bubble reply">${md(text)}</div>` : `<div class="bubble reply cited">${c}</div>`;
+}
+
+const composerHint = { placeholder: null };
+
+Object.assign(actions, {
+  // citeOpen — чип источника или цитата: окно «База знаний» на чанке.
+  async citeOpen(id, el) {
+    if (!id) return;
+    if (!app.kbOpenCite) { toast('Окна «База знаний» нет — фрагмент не открыть', true); return; }
+    await app.kbOpenCite(id, (el && el.dataset.quote) || '');
+  },
+  // citeClarify — уточняющий вопрос ведущего — подсказкой в поле ввода:
+  // человек отвечает своими словами, отправляет сам.
+  citeClarify(text) {
+    const ta = $('composer-text');
+    if (!ta || !text) return;
+    if (composerHint.placeholder === null) composerHint.placeholder = ta.placeholder;
+    ta.placeholder = 'Уточните: ' + text;
+    ta.dataset.clarify = text;
+    ta.focus();
+  },
+});
+
+// После отправки подсказка-уточнение больше не нужна.
+const citeSend = actions.sendComposer;
+actions.sendComposer = function () {
+  const ta = $('composer-text');
+  if (ta && ta.value.trim() && composerHint.placeholder !== null) {
+    ta.placeholder = composerHint.placeholder;
+    delete ta.dataset.clarify;
+    composerHint.placeholder = null;
+  }
+  citeSend();
+};

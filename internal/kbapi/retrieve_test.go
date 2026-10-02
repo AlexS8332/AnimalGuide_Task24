@@ -274,14 +274,14 @@ func TestAskModesV23(t *testing.T) {
 		t.Fatalf("неизвестный: %d %v", code, e)
 	}
 
-	// Прогон — все пять режимов можно.
+	// Прогон — все режимы можно (v24: шесть, с rag+cite).
 	f := &fakeEval{step: make(chan struct{}), opts: make(chan rag.EvalOptions, 1)}
 	a.Eval = f.eval
 	var ev EvalView
-	if code := post(t, srv, "/api/kb/evals", EvalRequest{Modes: allModes}, &ev); code != http.StatusAccepted || len(ev.Request.Modes) != 5 || ev.Total != 2*5 {
-		t.Fatalf("прогон пяти режимов: %d %+v", code, ev)
+	if code := post(t, srv, "/api/kb/evals", EvalRequest{Modes: allModes}, &ev); code != http.StatusAccepted || len(ev.Request.Modes) != 6 || ev.Total != 2*6 {
+		t.Fatalf("прогон всех режимов: %d %+v", code, ev)
 	}
-	if o := <-f.opts; len(o.Modes) != 5 || o.Modes[4] != rag.RAGBoth {
+	if o := <-f.opts; len(o.Modes) != 6 || o.Modes[4] != rag.RAGBoth || o.Modes[5] != rag.RAGCite {
 		t.Fatalf("режимы прогона: %+v", o.Modes)
 	}
 	close(f.step)

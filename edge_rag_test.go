@@ -186,6 +186,12 @@ func (e *edgeRAG) ask(ctx context.Context, q rag.Question, mode rag.Mode) (rag.A
 	default:
 		a.Text = "По найденным фрагментам: " + kbCutRunes(hitText(hits), 160) + " " + cites(hits, nil)
 	}
+	// v24: rag+cite — ответ kb_answer с проверкой (edge_cite_test.go).
+	if mode == rag.RAGCite && !strings.Contains(q.Text, "разметк") {
+		if err := e.cite(ctx, q, known, &a); err != nil {
+			return rag.Answer{}, err
+		}
+	}
 	in := len([]rune(a.System+a.User)) / 3
 	out := len([]rune(a.Text)) / 3
 	a.Usage = llm.Usage{Prompt: in, Completion: out, Total: in + out}
@@ -357,6 +363,8 @@ func (e *edgeRAG) eval(ctx context.Context, qs kb.QuestionSet, o rag.EvalOptions
 						if o.Judge != nil {
 							run.Judge = edgeJudge(q, m, run.Rule)
 							run.Final = run.Judge.Verdict
+							// v24: судья смысла — у ответов с цитатами.
+							run.Answer.Support = edgeCiteSupport(q, run.Answer)
 						}
 						run.Recall = m.UsesBase() && e.recall(ctx, q, a.Hits)
 					}

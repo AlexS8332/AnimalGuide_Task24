@@ -118,9 +118,9 @@ func edgeCompiler(req llm.Request, step int) llm.Response {
 type edgeApp struct {
 	m       *runs.Manager
 	handler http.Handler
-	// Диалоги сценария: основной (карточка, ветки, сравнение), подборка и
-	// пустой.
-	main, coll, empty string
+	// Диалоги сценария: основной (карточка, ветки, сравнение), подборка,
+	// ответы с источниками (v24) и пустой.
+	main, coll, cite, empty string
 	// facts — подставной демон «Интересных фактов» за /api/facts/.
 	facts *edgeFacts
 	// pipe — подставной REST конвейера за /api/pipeline/.
@@ -143,7 +143,16 @@ func newEdgeApp(t *testing.T) *edgeApp {
 		}
 		return `{"profile":{"set":[]},"memory":{"set":[]},"facts":{"set":[]}}`, nil
 	}
-	brain.LeadScript = func(llm.Request, int) llm.Response {
+	// v24: реплики диалога с источниками — ответ kb_answer текстом, как
+	// его собирает rag.CitedResult.Text (заготовки — после сборки базы).
+	var leadCite map[string]string
+	brain.LeadScript = func(req llm.Request, _ int) llm.Response {
+		user := agentstest.LastUser(req)
+		for k, v := range leadCite {
+			if strings.Contains(user, k) {
+				return llmtest.Text(v)
+			}
+		}
 		return llmtest.Text("Рысь охотится на зайцев, реже — на косуль и птиц.")
 	}
 	fake := &llmtest.Fake{Fn: brain.Chat}
@@ -168,6 +177,7 @@ func newEdgeApp(t *testing.T) *edgeApp {
 		meta[k] = v
 	}
 	a := &edgeApp{m: m, facts: newEdgeFacts(), pipe: newEdgePipe(), hub: newEdgeHub(), kb: newEdgeKB(t)}
+	leadCite = edgeLeadCite(t, a.kb.rag)
 	a.handler = server.New(m, static, meta, append(people.Extension(), compile.Extension(m)...)...)
 	a.seed(t)
 	return a
@@ -210,6 +220,12 @@ func (a *edgeApp) seed(t *testing.T) {
 	a.turn(t, a.main, agents.Request{Text: "Пиши мне всегда коротко. Мне интересны хищники тайги: чем питается рысь?"})
 	// Сравнение само ставит точку «до сравнения» и уходит в свою ветку.
 	a.turn(t, a.main, agents.Request{Kind: "compare", A: "рысь", B: "манул", Text: "Сравни: рысь и манул"})
+
+	// v24: ответы ведущего с источниками и цитатами, «не знаю» и разметка.
+	d = a.turn(t, "", agents.Request{Text: "Чем питается манул? Ответь по базе знаний"})
+	a.cite = d.ID
+	a.turn(t, a.cite, agents.Request{Text: "Сколько весит фосса?"})
+	a.turn(t, a.cite, agents.Request{Text: "А чем питается ксенофоб?"})
 
 	e, err := a.m.Create(runs.StartOptions{})
 	if err != nil {
@@ -302,6 +318,8 @@ func TestEdge(t *testing.T) {
 		{"kb-trace", a.main},
 		{"kb-modes", a.main},
 		{"kb-nofiles", a.main},
+		{"kb-cite", a.main},
+		{"chat-cite", a.cite},
 	}
 	total := 0
 	for _, sc := range scenarios {
@@ -372,6 +390,8 @@ func TestEdge(t *testing.T) {
 			{"kb-modes.png", "shot-kb-modes", a.main},
 			{"kb-calib.png", "shot-kb-calib", a.main},
 			{"kb-ask-modes.png", "shot-kb-ask-modes", a.main},
+			{"kb-cite.png", "shot-kb-cite", a.main},
+			{"chat-cite.png", "shot-chat-cite", a.cite},
 		} {
 			edgeRun(t, edge, fmt.Sprintf("%s/?scenario=%s#c=%s", shot.URL, s.scenario, s.conv), "1400,900",
 				"--screenshot="+filepath.Join(abs, s.file))

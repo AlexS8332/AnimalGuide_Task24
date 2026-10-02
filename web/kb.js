@@ -45,7 +45,18 @@
    .kb-thinking, .kb-answer[data-mode], .kb-src[data-chunk], .kb-cite,
    .kb-verdict[data-mode][data-verdict], #kb-ask-prompt, #kb-qa,
    #kb-qa-run, .kb-qa-row[data-id], #kb-qa-summary, #kb-qa-runs) — для
-   сценариев проверок и записи. Ответы модели — тоже данные: esc(). */
+   сценариев проверок и записи. Ответы модели — тоже данные: esc().
+
+   v24: режим rag+cite — ответ kb_answer с источниками и цитатами. В
+   «Спросить» у него вместо текста блок .kb-cited: бейджи проверки кодом
+   (.kb-check-badge[data-check]), ответ, источники .kb-cited-src[data-chunk]
+   (номер, статья › раздел, chunk_id), цитаты .kb-quote[data-chunk] и
+   утверждения судьи смысла .kb-claim[data-supported]; у «не знаю» — плашка
+   .kb-unknown с уточняющим вопросом .kb-clarify. Клик по цитате — вкладка
+   «Чанки» с подсветкой цитаты внутри чанка (mark.kb-qmark). «Контрольные
+   вопросы» — столбцы проверки rag+cite (.kb-qa-c[data-check]) и строки
+   сводки с новыми полями ModeStats. app.kbOpenCite(chunk_id, цитата) —
+   открыть чанк с подсветкой из чата (GET /api/kb/chunk/{id}). */
 
 const kb = {
   tab: 'docs',          // docs | chunks | search | ask | qa | modes | report
@@ -55,6 +66,7 @@ const kb = {
   strategy: 'structure',
   views: {},            // `${doc}|${index}` → {ok, code, data, error} — GET /api/kb/docs/{id}?index=
   focus: '',            // chunk_id, к которому прокрутить вкладку «Чанки»
+  quote: '',            // v24: цитата, подсвеченная внутри чанка focus
   // v23: index — all (оба рядом) или индекс; rewrite, rerank, filter —
   // второй этап: хоть один включён — поиск идёт через конвейер.
   form: { q: '', k: 5, mode: 'dense', index: 'all', rewrite: '', rerank: '', filter: false, k0: 20, ctx: '' },
@@ -376,10 +388,24 @@ function kbChunkSummaryHTML(v) {
 }
 
 // kbPlain — кусок текста документа: строки «## Путь › Раздел» —
-// заголовками; всё — через esc().
-function kbPlain(s) {
-  return s.split('\n').map(line => line.startsWith('## ')
-    ? `<span class="kb-hd">${esc(line.slice(3))}</span>` : esc(line)).join('\n');
+// заголовками; всё — через esc(). v24: [a, b) — подсвеченная цитата
+// (смещения в кодовых точках куска), её части по строкам — mark.kb-qmark.
+function kbPlain(s, a, b) {
+  let pos = 0;
+  return s.split('\n').map(line => {
+    const cps = Array.from(line);
+    const from = pos;
+    pos += cps.length + 1;
+    const head = line.startsWith('## ');
+    const html = kbMarkHTML(head ? cps.slice(3) : cps, from + (head ? 3 : 0), a, b);
+    return head ? `<span class="kb-hd">${html}</span>` : html;
+  }).join('\n');
+}
+// kbMarkHTML — кодовые точки строки (начало — off) с подсветкой [a, b).
+function kbMarkHTML(cps, off, a, b) {
+  if (typeof a !== 'number' || b <= off || a >= off + cps.length) return esc(cps.join(''));
+  const x = Math.max(0, a - off), y = Math.min(cps.length, b - off);
+  return esc(cps.slice(0, x).join('')) + `<mark class="kb-qmark">${esc(cps.slice(x, y).join(''))}</mark>` + esc(cps.slice(y).join(''));
 }
 
 // kbTextHTML — текст документа блоками чанков. Смещения — в рунах, поэтому
@@ -405,11 +431,18 @@ function kbTextHTML(v) {
     const next = cs[i + 1];
     const ov = next && next.start < end ? Math.max(next.start, start) : end;
     const tags = [];
+    // v24: цитата внутри чанка, к которому ведёт ссылка, — подсветкой.
+    // Смещения — в кодовых точках текста документа.
+    let qa = null, qb = null;
+    if (kb.quote && c.chunk_id === kb.focus) {
+      const f = kbFindQuote(t.slice(start, end), kb.quote);
+      if (f) { qa = start + f[0]; qb = start + f[1]; } else tags.push('<span class="chip warn kb-qmiss" title="цитата не нашлась в тексте чанка дословно">цитата не найдена</span>');
+    }
     if (c.mixed) tags.push('<span class="chip warn kb-mixed">на стыке разделов</span>');
     if (ov < end) tags.push(`<span class="chip kb-ovl">перекрытие ${esc(end - ov)} симв.</span>`);
     html += `<div class="kb-chunk ${i % 2 ? 'odd' : 'even'}${c.mixed ? ' mixed' : ''}${c.chunk_id === kb.focus ? ' focus' : ''}" data-id="${esc(c.chunk_id)}" data-ord="${esc(c.ord)}">
       <div class="kb-chunk-head"><code class="kb-cid">${esc(c.chunk_id)}</code><span class="kb-cpath">${esc(kbPath(c))}</span><span class="kb-ctok">${esc(c.tokens)} ток. · ${esc(c.start)}–${esc(c.end)}</span>${tags.join('')}</div>
-      <div class="kb-chunk-text">${kbPlain(piece(start, ov).replace(/^[ \t]+/, ''))}${ov < end ? `<span class="kb-overlap" title="этот текст входит и в следующий чанк">${kbPlain(piece(ov, end))}</span>` : ''}</div></div>`;
+      <div class="kb-chunk-text">${kbPiece(piece(start, ov), start, qa, qb)}${ov < end ? `<span class="kb-overlap" title="этот текст входит и в следующий чанк">${qa === null ? kbPlain(piece(ov, end)) : kbPlain(piece(ov, end), qa - ov, qb - ov)}</span>` : ''}</div></div>`;
     pos = Math.max(pos, end);
   });
   if (pos < t.length) html += gap(pos, t.length);
@@ -417,11 +450,61 @@ function kbTextHTML(v) {
   return html;
 }
 
+// kbPiece — начало блока чанка без ведущих пробелов; подсветка [qa, qb)
+// (смещения в тексте документа) сдвигается вместе с ним.
+function kbPiece(s, start, qa, qb) {
+  const lead = Array.from(s.match(/^[ \t]*/)[0]).length;
+  const rest = Array.from(s).slice(lead).join('');
+  if (qa === null) return kbPlain(rest);
+  return kbPlain(rest, qa - start - lead, qb - start - lead);
+}
+
+// kbNorm — нормализация для поиска цитаты, как у проверки кодом: регистр,
+// ё → е, кавычки, тире, пробелы подряд — один; ударение выкинуто. map[i] —
+// индекс кодовой точки исходника для i-го символа результата.
+function kbNorm(cps) {
+  let out = '';
+  const map = [];
+  for (let i = 0; i < cps.length; i++) {
+    let ch = cps[i].toLowerCase();
+    if (ch === '́') continue;
+    if (ch === 'ё') ch = 'е';
+    else if (/[«»„“”‟"]/.test(ch)) ch = '"';
+    else if (/[‘’‛`]/.test(ch)) ch = "'";
+    else if (/[‐‑‒–—―−]/.test(ch)) ch = '-';
+    else if (/\s/.test(ch)) {
+      if (!out || out.endsWith(' ')) continue;
+      ch = ' ';
+    }
+    out += ch;
+    map.push(i);
+  }
+  return { s: out, map };
+}
+
+// kbFindQuote — где в тексте (массив кодовых точек) цитата: [a, b) или
+// null. Обрамляющие кавычки и многоточия не ищутся; цитата с пропуском
+// «…» — подсвечивается самый длинный её кусок.
+function kbFindQuote(cps, quote) {
+  const clean = String(quote || '').trim().replace(/^[«"„“\s]+|[»"”\s]+$/g, '').replace(/^(?:…|\.\.\.)\s*|\s*(?:…|\.\.\.)$/g, '');
+  if (!clean) return null;
+  const parts = [clean].concat(clean.split(/\s*(?:…|\.\.\.)\s*/).filter(x => x.length > 3).sort((a, b) => b.length - a.length));
+  const t = kbNorm(cps);
+  for (const p of parts) {
+    const n = kbNorm(Array.from(p)).s.trim();
+    if (!n) continue;
+    const i = t.s.indexOf(n);
+    if (i >= 0) return [t.map[i], t.map[i + n.length - 1] + 1];
+  }
+  return null;
+}
+
 function kbScrollFocus() {
   if (!kb.focus || !$('kb-text')) return;
   const el = [...document.querySelectorAll('#kb-text .kb-chunk')].find(x => x.dataset.id === kb.focus);
   if (!el) return;
-  el.scrollIntoView({ block: 'center' });
+  const m = el.querySelector('mark.kb-qmark');
+  (m || el).scrollIntoView({ block: 'center' });
   el.classList.add('flash');
   setTimeout(() => el.classList.remove('flash'), 1600);
 }
@@ -749,10 +832,13 @@ function kbQuestionsHTML(ret) {
 
 // v23: три режима с конвейером retrieve — модель и промпт те же, что у rag,
 // отличается только, какие фрагменты дошли.
-const kbModes = ['norag', 'rag', 'rag+filter', 'rag+rewrite', 'rag+both'];
+// v24: rag+cite — поиск как у rag+both, ответ — kb_answer с источниками и
+// цитатами, проверенный кодом.
+const kbModes = ['norag', 'rag', 'rag+filter', 'rag+rewrite', 'rag+both', 'rag+cite'];
 const kbModeTitle = {
   norag: 'Без базы', rag: 'С базой (RAG)',
   'rag+filter': 'RAG + фильтр', 'rag+rewrite': 'RAG + rewrite', 'rag+both': 'RAG + rewrite + фильтр',
+  'rag+cite': 'RAG + источники и цитаты',
 };
 const kbModeHint = {
   norag: 'модель отвечает по памяти: системный промпт и вопрос',
@@ -760,9 +846,10 @@ const kbModeHint = {
   'rag+filter': 'кандидаты K0 → фильтр релевантности и отсев повторов текста → итог',
   'rag+rewrite': 'запрос переписан кодом (синонимы, контекст) — переписанный идёт только в поиск',
   'rag+both': 'rewrite кодом + фильтр релевантности',
+  'rag+cite': 'как rag+both, ответ — источники и дословные цитаты, проверенные кодом; «не знаю» при слабом контексте решает код',
 };
 const kbMaxAskModes = 3;
-function kbPipedMode(m) { return m === 'rag+filter' || m === 'rag+rewrite' || m === 'rag+both'; }
+function kbPipedMode(m) { return m === 'rag+filter' || m === 'rag+rewrite' || m === 'rag+both' || m === 'rag+cite'; }
 // kbSortModes — режимы в порядке kbModes, без повторов и неизвестных.
 function kbSortModes(ms) { return kbModes.filter(m => ms.includes(m)); }
 
@@ -947,7 +1034,7 @@ function kbAnswerHTML(a, run, q, err) {
     <div class="kb-answer-head"><b>${esc(kbModeTitle[a.mode] || a.mode)}</b><code>${esc(a.mode)}</code>
       ${run ? kbVerdictHTML(a.mode, run.final, kbRuleTitle(run.rule), true) : ''}${meta}</div>
     <div class="kb-answer-sub hint">${esc(kbModeHint[a.mode] || '')}</div>
-    ${err ? `<div class="facts-error kb-answer-error">${esc(err)}</div>` : `<div class="kb-answer-text">${kbAnswerTextHTML(a.text, a.hits)}</div>`}
+    ${err ? `<div class="facts-error kb-answer-error">${esc(err)}</div>` : a.cited ? kbCitedHTML(a) : `<div class="kb-answer-text">${kbAnswerTextHTML(a.text, a.hits)}</div>`}
     ${run ? kbRuleHTML(run.rule) : ''}
     ${a.mode !== 'norag' && !err ? kbSourcesHTML(a, run, q) : ''}
   </section>`;
@@ -969,7 +1056,7 @@ function kbSourcesHTML(a, run, q) {
     <div class="kb-srcs-head"><b>Найденные фрагменты</b>${s.index ? ` <code>${esc(s.index)}</code>` : ''} ${kbModeLine(s)}${recall}</div>
     ${a.trace ? kbTraceBriefHTML(a.trace) : ''}
     ${hits.length ? hits.map(h => {
-      const cited = (a.text || '').includes(h.chunk_id);
+      const cited = (a.text || '').includes(h.chunk_id) || kbCitedIDs(a).has(h.chunk_id);
       return `<div class="kb-src${cited ? ' cited' : ''}${want.has(h.doc_id) ? ' want' : ''}" data-chunk="${esc(h.chunk_id)}" data-doc="${esc(h.doc_id)}" data-index="${esc(h.strategy || s.index || '')}" data-action="kbOpenChunk" data-arg="${esc(h.chunk_id)}" title="открыть чанк в тексте документа">
         <div class="kb-hit-head"><span class="kb-rank">${esc(h.rank)}</span><span class="kb-score">${esc(typeof h.score === 'number' ? h.score.toFixed(3) : '')}</span>
           <span class="kb-hit-where"><b>${esc(h.title)}</b> › ${esc(kbPath(h))}</span>${cited ? '<span class="chip ok kb-cited">в ответе</span>' : ''}</div>
@@ -1137,7 +1224,7 @@ function kbQaLiveHTML() {
   const modes = kbQaModes();
   if (qs.length) {
     html += `<table class="grid kb-table kb-qa-table" id="kb-qa-table" data-modes="${esc(modes.join(','))}"><tr><th>id</th><th>тип</th><th>вопрос</th><th>ожидание</th><th>источники</th>
-      ${modes.map(m => `<th class="kb-qa-v" data-mode="${esc(m)}" title="${esc(kbModeHint[m] || '')}">${esc(kbModeTitle[m] || m)}</th>`).join('')}<th class="kb-qa-v" title="нашёлся ли в выдаче режимов с базой фрагмент с доказательством">источник найден</th></tr>
+      ${modes.map(m => `<th class="kb-qa-v" data-mode="${esc(m)}" title="${esc(kbModeHint[m] || '')}">${esc(kbModeTitle[m] || m)}</th>`).join('')}<th class="kb-qa-v" title="нашёлся ли в выдаче режимов с базой фрагмент с доказательством">источник найден</th>${modes.includes('rag+cite') ? kbQaCiteHeadHTML() : ''}</tr>
       ${qs.map(q => kbQaRowHTML(q, rows.find(r => r.question && r.question.id === q.id), modes)).join('')}</table>`;
   }
   if (v && v.report) html += kbQaSummaryHTML(v.report, v);
@@ -1174,8 +1261,9 @@ function kbQaRowHTML(q, row, modes) {
     <td><b>${esc(q.id)}</b></td><td><span class="chip">${esc(q.type)}</span></td>
     <td class="kb-qa-q">${esc(q.q)}${kbList(q.context).length ? `<div class="hint">после: ${q.context.map(c => `«${esc(c)}»`).join(' → ')}</div>` : ''}</td>
     <td class="kb-qa-exp">${esc(kbCut(exp, 110))}</td><td class="kb-qa-src hint">${esc(kbSources(q))}</td>
-    ${modes.map(m => `<td class="kb-qa-v" data-mode="${esc(m)}">${cell(m)}</td>`).join('')}<td class="kb-qa-v">${found}</td></tr>`;
-  if (open) html += `<tr class="kb-qa-detail" data-id="${esc(q.id)}"><td colspan="${5 + modes.length + 1}">${kbQaDetailHTML(q, row, modes)}</td></tr>`;
+    ${modes.map(m => `<td class="kb-qa-v" data-mode="${esc(m)}">${cell(m)}</td>`).join('')}<td class="kb-qa-v">${found}</td>${modes.includes('rag+cite') ? kbQaCiteCellsHTML(q, row, running) : ''}</tr>`;
+  const extra = modes.includes('rag+cite') ? kbQaCiteCols.length : 0;
+  if (open) html += `<tr class="kb-qa-detail" data-id="${esc(q.id)}"><td colspan="${5 + modes.length + 1 + extra}">${kbQaDetailHTML(q, row, modes)}</td></tr>`;
   return html;
 }
 
@@ -1196,7 +1284,7 @@ function kbQaDetailHTML(q, row, modes) {
             <span class="hint">правило</span> ${kbVerdictHTML(m, r.rule && r.rule.verdict, kbRuleTitle(r.rule))}
             ${j ? `<span class="hint">судья</span> ${kbVerdictHTML(m, j.verdict, j.reason)}` : ''}
             <span class="kb-answer-meta">${esc(kbCost(a.cost))} · ${esc(kbMs(a.ms))}</span></div>
-          ${r.error ? `<div class="facts-error">${esc(r.error)}</div>` : `<div class="kb-answer-text">${kbAnswerTextHTML(a.text, a.hits)}</div>`}
+          ${r.error ? `<div class="facts-error">${esc(r.error)}</div>` : a.cited ? kbCitedHTML(a) : `<div class="kb-answer-text">${kbAnswerTextHTML(a.text, a.hits)}</div>`}
           ${a.trace ? kbTraceBriefHTML(a.trace) : ''}
           ${j && j.reason ? `<div class="kb-judge"><b>судья:</b> ${esc(j.reason)}</div>` : ''}
           ${kbRuleHTML(r.rule)}
@@ -1239,7 +1327,9 @@ function kbQaSummaryHTML(rep, v) {
     if (x === null || xs.every(y => y === x)) return '';
     return x === (dir === 'max' ? Math.max(...xs) : Math.min(...xs)) ? ' best' : '';
   };
-  const metrics = kbQaMetrics.filter(([k]) => (k !== 'agreement' || req.judge) && (k !== 'flip_rate' || (rep.repeats || req.repeats) > 1));
+  const cite = stats.some(s => s.mode === 'rag+cite');
+  const metrics = kbQaMetrics.concat(cite ? kbQaCiteMetrics : [])
+    .filter(([k]) => (k !== 'agreement' || req.judge) && (k !== 'flip_rate' || (rep.repeats || req.repeats) > 1));
   const created = rep.created ? kbTime(rep.created) : '';
   return `<div id="kb-qa-summary" class="kb-qa-summary">
     <h4 class="kb-h">Итог</h4>
@@ -1607,6 +1697,226 @@ function kbHistSVG(dev, out, chosen) {
   return `<svg id="kb-hist" class="kb-hist" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="гистограмма косинусов dev и out" data-dev="${dev.length}" data-out="${out.length}">${g}</svg>`;
 }
 
+/* ---------- v24: ответ с источниками и цитатами (rag+cite) ---------- */
+
+// kbCitedIDs — chunk_id источников и цитат ответа rag+cite.
+function kbCitedIDs(a) {
+  const c = (a && a.cited && a.cited.cited) || {};
+  return new Set(kbList(c.sources).map(s => s.chunk_id).concat(kbList(c.quotes).map(x => x.chunk_id)));
+}
+
+// kbChunkWhere — «статья › раздел» фрагмента из выдачи ответа; фрагмента в
+// выдаче нет — null.
+function kbChunkWhere(hits, id) {
+  const h = kbList(hits).find(x => x.chunk_id === id);
+  if (!h) return null;
+  return { title: h.title || h.doc_id || '', section: h.section || kbList(h.section_path).slice(-1)[0] || '' };
+}
+
+// kbChunkAttrs — data-атрибуты перехода к чанку: документ и стратегия — из
+// chunk_id («doc/strategy/ord»).
+function kbChunkAttrs(id) {
+  const [doc, index] = String(id || '').split('/');
+  return `data-chunk="${esc(id)}" data-doc="${esc(doc || '')}" data-index="${esc(index || '')}"`;
+}
+
+// kbCheckBadgesHTML — итог проверки кодом бейджами: источники, цитаты,
+// дословность, числа в цитатах, «не проверено» и число отказов.
+function kbCheckBadgesHTML(c, ch) {
+  const badge = (key, cls, label, title) =>
+    `<span class="kb-check-badge ${cls}" data-check="${esc(key)}" data-ok="${cls === 'ok' ? 1 : 0}" title="${esc(title)}">${esc(label)}</span>`;
+  const out = [];
+  if (c.status !== 'unknown') {
+    const unknownIDs = kbList(ch.unknown_ids);
+    const src = ch.has_sources && !unknownIDs.length;
+    out.push(badge('sources', src ? 'ok' : 'bad', 'источники ' + (src ? '✓' : '✗'),
+      unknownIDs.length ? 'не из выдачи хода: ' + unknownIDs.join(', ') : ch.has_sources ? 'все источники — фрагменты, выданные в этом ходе' : 'у ответа нет источника'));
+    out.push(badge('quotes', ch.has_quotes ? 'ok' : 'bad', 'цитаты ' + (ch.has_quotes ? '✓' : '✗'), ch.has_quotes ? 'у ответа есть цитата' : 'у ответа нет цитаты'));
+    const m = kbList(c.quotes).length;
+    const n = Math.max(0, m - kbList(ch.not_verbatim).length);
+    out.push(badge('verbatim', m && n === m ? 'ok' : 'bad', `дословно ${n} из ${m}`, 'цитата — подстрока своего фрагмента после нормализации (регистр, ё, кавычки, тире, пробелы)'));
+    const miss = kbList(ch.numbers_missing);
+    out.push(badge('numbers', miss.length ? 'warn' : 'ok', 'числа в цитатах ' + (miss.length ? '⚠ ' + miss.join(', ') : '✓'),
+      miss.length ? 'числа ответа, которых нет ни в одной цитате' : 'все числа ответа есть в цитатах'));
+  }
+  if (ch.unverified) out.push(badge('unverified', 'bad', 'не проверено', `ответ принят после ${ch.rejects || 0} отказов проверки — проверку он так и не прошёл`));
+  if (ch.rejects > 0) out.push(badge('rejects', ch.unverified ? 'bad' : 'warn', 'отказов: ' + ch.rejects, 'сколько раз код вернул ответ модели на исправление'));
+  return out.length ? `<div class="kb-check" data-ok="${ch.ok ? 1 : 0}">${out.join('')}</div>` : '';
+}
+
+// kbSupportHTML — судья смысла: утверждения ответа и чем подтверждены.
+function kbSupportHTML(sp) {
+  if (!sp) return '';
+  const claims = kbList(sp.claims);
+  const ok = claims.filter(c => c.supported).length;
+  return `<div class="kb-support" data-ok="${sp.ok ? 1 : 0}">
+    <div class="kb-cited-h">Смысл — судья: подтверждено <b>${esc(ok)}</b> из ${esc(claims.length)}${sp.cost && sp.cost.usd > 0 ? ` <span class="hint">${esc(kbCost(sp.cost))}</span>` : ''}</div>
+    <ul class="kb-claims">${claims.map(c => {
+      const k = typeof c.quote === 'number' && c.quote >= 0 ? c.quote + 1 : 0;
+      const verdict = c.supported ? (k ? 'подтверждено цитатой №' + k : 'подтверждено') : 'не подтверждено';
+      return `<li class="kb-claim ${c.supported ? 'ok' : 'bad'}" data-supported="${c.supported ? 1 : 0}"${k ? ` data-quote="${k}"` : ''}>
+        <span class="kb-claim-mark">${c.supported ? '✓' : '✗'}</span> <span class="kb-claim-t">${esc(c.claim)}</span> <span class="kb-claim-v">${esc(verdict)}</span>${c.reason ? `<div class="hint">${esc(c.reason)}</div>` : ''}</li>`;
+    }).join('')}</ul></div>`;
+}
+
+// kbCitedHTML — ответ rag+cite: бейджи проверки, ответ, источники,
+// цитаты, судья смысла; у «не знаю» — плашка с уточняющим вопросом. Всё,
+// что сказала модель, — через esc().
+function kbCitedHTML(a) {
+  const r = a.cited || {};
+  const c = r.cited || {};
+  const ch = r.check || {};
+  const srcs = kbList(c.sources);
+  const num1 = id => srcs.findIndex(s => s.chunk_id === id) + 1;
+  const badges = kbCheckBadgesHTML(c, ch);
+  const problems = kbList(ch.problems).length
+    ? `<details class="kb-problems"><summary>Замечания проверки: ${esc(ch.problems.length)}</summary><ul>${ch.problems.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : '';
+  if (c.status === 'unknown') {
+    return `<div class="kb-cited" data-status="unknown" data-forced="${ch.forced ? 1 : 0}">
+      ${badges}
+      <div class="kb-unknown"><b>Не знаю</b>${c.answer ? ' — ' + esc(c.answer) : ''}
+        ${c.clarify ? `<div class="kb-clarify"><span class="kb-clarify-l">Уточните:</span> ${esc(c.clarify)}</div>` : '<div class="kb-clarify none hint">уточняющего вопроса нет</div>'}
+        ${ch.forced ? '<div class="kb-forced" data-forced="1">решил код: релевантность ниже порога — ответить по существу было нечем</div>'
+          : '<div class="kb-forced hint" data-forced="0">решила модель: в найденных фрагментах ответа нет</div>'}</div>
+      ${problems}
+    </div>`;
+  }
+  const answer = esc(c.answer || '').replace(/\[(\d{1,2})\]/g, '<sup class="kb-cited-ref">[$1]</sup>');
+  const notV = new Set(kbList(ch.not_verbatim));
+  const unknownIDs = new Set(kbList(ch.unknown_ids));
+  const srcHTML = srcs.map((s, i) => {
+    const w = kbChunkWhere(a.hits, s.chunk_id);
+    const bad = !w || unknownIDs.has(s.chunk_id);
+    return `<button type="button" class="kb-cited-src${bad ? ' unknown' : ''}" ${kbChunkAttrs(s.chunk_id)} data-n="${i + 1}" data-action="kbOpenChunk" data-arg="${esc(s.chunk_id)}" title="${esc(bad ? 'этого фрагмента не было в выдаче хода' : 'открыть фрагмент в тексте документа')}">
+      <span class="kb-cited-n">[${i + 1}]</span> ${w ? `<b>${esc(w.title)}</b> › ${esc(w.section)}` : '<b>не из выдачи</b>'} <code>${esc(s.chunk_id)}</code></button>`;
+  }).join('');
+  const quotes = kbList(c.quotes).map((x, i) => {
+    const n = num1(x.chunk_id);
+    const bad = notV.has(i);
+    return `<button type="button" class="kb-quote${bad ? ' bad' : ''}" ${kbChunkAttrs(x.chunk_id)} data-quote="${esc(x.text)}" data-n="${i + 1}" data-src="${n}" data-verbatim="${bad ? 0 : 1}" data-action="kbOpenQuote" data-arg="${esc(x.chunk_id)}" title="открыть фрагмент с подсветкой цитаты">
+      <span class="kb-quote-n">№${i + 1}</span> <i class="kb-quote-t">«${esc(x.text)}»</i> <span class="kb-cited-n">[${n || '?'}]</span>${bad ? ' <span class="chip warn">не дословно</span>' : ''}</button>`;
+  }).join('');
+  return `<div class="kb-cited" data-status="answered" data-ok="${ch.ok ? 1 : 0}"${ch.unverified ? ' data-unverified="1"' : ''}>
+    ${badges}
+    <div class="kb-cited-answer kb-answer-text">${answer}</div>
+    ${srcs.length ? `<div class="kb-cited-srcs"><div class="kb-cited-h">Источники</div>${srcHTML}</div>` : '<div class="kb-cited-h bad">Источников нет</div>'}
+    ${quotes ? `<div class="kb-quotes"><div class="kb-cited-h">Цитаты <span class="hint">— клик откроет фрагмент с подсветкой</span></div>${quotes}</div>` : '<div class="kb-cited-h bad">Цитат нет</div>'}
+    ${kbSupportHTML(a.support)}
+    ${problems}
+  </div>`;
+}
+
+// Столбцы проверки rag+cite в таблице контрольных вопросов.
+const kbQaCiteCols = [
+  ['sources', 'источники', 'у ответа есть источник, и все chunk_id — из выдачи хода'],
+  ['quotes', 'цитаты', 'у ответа есть хотя бы одна цитата'],
+  ['verbatim', 'дословно', 'все цитаты — дословные подстроки своих фрагментов'],
+  ['support', 'смысл', 'судья: каждое утверждение ответа подтверждено цитатами'],
+  ['unknown', 'не знаю', '✓ — «не знаю» там, где ответа в базе нет; ✗ — ложное «не знаю» или ответ по существу там, где ответа нет'],
+];
+
+function kbQaCiteHeadHTML() {
+  return kbQaCiteCols.map(([k, label, title]) => `<th class="kb-qa-c" data-check="${esc(k)}" title="${esc('rag+cite: ' + title)}">${esc(label)}</th>`).join('');
+}
+
+// kbCiteVerdict — проверка одного прогона rag+cite: ok, bad или na (не
+// применимо: у «не знаю» нет источников, у ответа без судьи — смысла).
+function kbCiteVerdict(q, run, key) {
+  const a = run.answer || {};
+  const c = (a.cited && a.cited.cited) || {};
+  const ch = (a.cited && a.cited.check) || {};
+  const unknown = c.status === 'unknown';
+  switch (key) {
+    case 'sources': return unknown ? 'na' : ch.has_sources && !kbList(ch.unknown_ids).length ? 'ok' : 'bad';
+    case 'quotes': return unknown ? 'na' : ch.has_quotes ? 'ok' : 'bad';
+    case 'verbatim': return unknown ? 'na' : kbList(c.quotes).length && !kbList(ch.not_verbatim).length ? 'ok' : 'bad';
+    case 'support': return unknown || !a.support ? 'na' : a.support.ok ? 'ok' : 'bad';
+    case 'unknown':
+      if (unknown) return q.answerable ? 'bad' : 'ok';
+      return q.answerable ? 'na' : 'bad';
+  }
+  return 'na';
+}
+
+// kbQaCiteCellsHTML — ячейки проверки rag+cite строки: по всем повторам
+// (хоть один ✗ — ✗).
+function kbQaCiteCellsHTML(q, row, running) {
+  const runs = kbList(row && row.runs && row.runs['rag+cite']).filter(r => r.answer && r.answer.cited);
+  return kbQaCiteCols.map(([k, label]) => {
+    if (!runs.length) return `<td class="kb-qa-c" data-check="${esc(k)}" data-v="">${running ? '<span class="kb-verdict pending">…</span>' : ''}</td>`;
+    const vs = runs.map(r => kbCiteVerdict(q, r, k));
+    const v = vs.includes('bad') ? 'bad' : vs.includes('ok') ? 'ok' : 'na';
+    const icon = { ok: '✓', bad: '✗', na: '—' }[v];
+    const parts = [label + ': ' + { ok: 'да', bad: 'нет', na: 'не применимо' }[v]];
+    const last = runs[runs.length - 1].answer.cited;
+    const ch = last.check || {};
+    if (k === 'verbatim' && last.cited && kbList(last.cited.quotes).length) {
+      const m = last.cited.quotes.length;
+      parts.push(`дословно ${m - kbList(ch.not_verbatim).length} из ${m}`);
+    }
+    if (k === 'unknown' && last.cited && last.cited.status === 'unknown') parts.push(ch.forced ? 'решил код' : 'решила модель');
+    if (k === 'support' && runs[runs.length - 1].answer.support) {
+      const sp = runs[runs.length - 1].answer.support;
+      parts.push(`подтверждено ${sp.supported || 0} из ${(sp.supported || 0) + (sp.unsupported || 0)}`);
+    }
+    if (runs.some(r => (r.answer.cited.check || {}).unverified)) parts.push('есть «не проверено» после отказов');
+    return `<td class="kb-qa-c ${v}" data-check="${esc(k)}" data-v="${v}" title="${esc(parts.join('; '))}">${icon}</td>`;
+  }).join('');
+}
+
+// kbCiteOf — поле ModeStats v24: у режима без цитат и если поля нет в
+// JSON (старый отчёт) — «—».
+function kbCiteOf(s, k, f) { return s.mode === 'rag+cite' && typeof s[k] === 'number' ? f(s[k], s) : '—'; }
+const kbOutOf = (x, s) => `${num(x)} из ${num(s.questions)}`;
+const kbQaCiteMetrics = [
+  ['with_sources', 'с источниками', s => kbCiteOf(s, 'with_sources', kbOutOf), 'max'],
+  ['with_quotes', 'с цитатами', s => kbCiteOf(s, 'with_quotes', kbOutOf), 'max'],
+  ['verbatim', 'дословность цитат', s => kbCiteOf(s, 'verbatim', x => (x <= 1 ? kbPct(x) : num(x))), 'max'],
+  ['supported', 'смысл подтверждён цитатами', s => kbCiteOf(s, 'supported', kbOutOf), 'max'],
+  ['unverified', '«не проверено» после отказов', s => kbCiteOf(s, 'unverified', x => num(x)), 'min'],
+  ['forced_unknown', '«не знаю» решил код', s => kbCiteOf(s, 'forced_unknown', x => num(x))],
+  ['false_unknown', 'ложных «не знаю» на отвечаемых', s => kbCiteOf(s, 'false_unknown', x => num(x)), 'min'],
+];
+
+// kbGoChunk — вкладка «Чанки» на чанке id; quote — подсветить цитату.
+async function kbGoChunk(id, doc, index, quote) {
+  kbReadForm();
+  kbAskReadForm();
+  const [d, s] = String(id).split('/');
+  kb.doc = doc || d || kb.doc;
+  kb.strategy = index || s || kb.strategy;
+  kb.focus = id;
+  kb.quote = quote || '';
+  kb.tab = 'chunks';
+  kbPaint('tabs');
+  await kbShowChunks(true);
+}
+
+// app.kbOpenCite — для чата: окно «База знаний» на чанке chunk_id с
+// подсветкой цитаты. Чанк сначала спрашивается у /api/kb/chunk/{id}: так
+// известны документ и стратегия, а нет чанка — тост, а не пустая вкладка.
+app.kbOpenCite = async function (id, quote) {
+  if (!id) return false;
+  const r = await factsAPI('GET', '/api/kb/chunk/' + String(id).split('/').map(encodeURIComponent).join('/'));
+  if (!r.ok) {
+    toast('Фрагмент ' + id + ' не открылся: ' + r.error, true);
+    return false;
+  }
+  const c = r.data.chunk || {};
+  if ($('window').open && $('kb-root')) {
+    await kbGoChunk(c.chunk_id || id, c.doc_id, c.strategy, quote);
+    return true;
+  }
+  const [d, s] = String(id).split('/');
+  kb.doc = c.doc_id || d;
+  kb.strategy = c.strategy || s || kb.strategy;
+  kb.focus = c.chunk_id || id;
+  kb.quote = quote || '';
+  kb.tab = 'chunks';
+  openWindow('kb');
+  return true;
+};
+
 /* ---------- действия ---------- */
 
 Object.assign(actions, {
@@ -1615,7 +1925,7 @@ Object.assign(actions, {
     if (kb.tab === 'search') kbReadForm();
     if (kb.tab === 'ask') kbAskReadForm();
     kb.tab = tab;
-    if (tab !== 'chunks') kb.focus = '';
+    if (tab !== 'chunks') { kb.focus = ''; kb.quote = ''; }
     kbPaint('tabs', 'body');
     if (tab === 'chunks') await kbShowChunks(false);
     if (tab === 'report' && (!kb.report || !kb.report.ok)) {
@@ -1636,6 +1946,7 @@ Object.assign(actions, {
     if (!id) return;
     kb.doc = id;
     kb.focus = '';
+    kb.quote = '';
     kb.tab = 'chunks';
     kbPaint('tabs');
     await kbShowChunks(true);
@@ -1644,26 +1955,25 @@ Object.assign(actions, {
   },
   async kbOpenChunk(id, el) {
     if (!id || !el) return;
-    kbReadForm();
-    kbAskReadForm();
-    kb.doc = el.dataset.doc || kb.doc;
-    if (el.dataset.index) kb.strategy = el.dataset.index;
-    kb.focus = id;
-    kb.tab = 'chunks';
-    kbPaint('tabs');
-    await kbShowChunks(true);
+    await kbGoChunk(id, el.dataset.doc, el.dataset.index, '');
+  },
+  // v24: цитата ответа rag+cite — к чанку с подсветкой процитированного.
+  async kbOpenQuote(id, el) {
+    if (!id || !el) return;
+    await kbGoChunk(id, el.dataset.doc, el.dataset.index, el.dataset.quote || '');
   },
   async kbPickDoc(id) {
     if (!id) return;
     kb.doc = id;
     kb.focus = '';
+    kb.quote = '';
     await kbShowChunks(true);
   },
   async kbPickStrategy(s) {
     if (!s || s === kb.strategy) return;
     kb.strategy = s;
     // Чанк из другой стратегии — не тот, к которому прокручивать.
-    if (kb.focus && !kb.focus.includes('/' + s + '/')) kb.focus = '';
+    if (kb.focus && !kb.focus.includes('/' + s + '/')) { kb.focus = ''; kb.quote = ''; }
     const top = $('window-body') ? $('window-body').scrollTop : 0;
     await kbShowChunks(true);
     if (!kb.focus && $('window-body')) $('window-body').scrollTop = top;
