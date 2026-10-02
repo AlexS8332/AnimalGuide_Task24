@@ -256,3 +256,28 @@ func TestIntroNamesAndCatVariant(t *testing.T) {
 		}
 	}
 }
+
+// TestAmbiguous — неоднозначные названия на настоящем корпусе: общие
+// однословные синонимы, не вошедшие в найденное название.
+func TestAmbiguous(t *testing.T) {
+	a := realAliases(t)
+	cases := map[string]string{
+		"Чем питается рысь и сколько весит росомаха?": "рысь",
+		"Сколько весит медведь?":                      "медведь",
+		"Где водится барс?":                           "барс",
+		"Сколько весит белый медведь?":                "",
+		"Чем питается барсук?":                        "",
+		"Сколько осталось амурских барсов?":           "",
+		"Сравни массу манула и ирбиса":                "",
+		"Чем харза отличается от соболя по массе?":    "",
+	}
+	for text, want := range cases {
+		if got := strings.Join(a.Ambiguous(text), ", "); got != want {
+			t.Errorf("%q: %q, ждали %q", text, got, want)
+		}
+	}
+	var nilA *Aliases
+	if nilA.Ambiguous("рысь") != nil {
+		t.Error("пустой словарь")
+	}
+}

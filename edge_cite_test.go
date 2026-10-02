@@ -259,5 +259,28 @@ func edgeLeadCite(t *testing.T, r *edgeRAG) map[string]string {
 	c := edgeAnswered("Ксенофоб ест теги и запивает их амперсандами [1].", []kb.Hit{h})
 	c.Quotes[0].Text = `Ксенофоб ест теги <img src=x onerror="window.__xss=43"> и запивает их амперсандами &amp;.`
 	out["ксенофоб"] = edgeCitedText(c, []kb.Hit{h})
+
+	// Тексты, собранные самим rag.CitedResult.Text: «не проверено»,
+	// «не знаю» с ближайшим найденным, источник без заголовка и «[» в
+	// заголовке при ответе, который начинается словом «Уточните».
+	mass, err := edgeHits(ctx, r.s, "manul", "Описание и внешний вид")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = edgeAnswered("Манул весит 2—5 кг, к зиме — до 6 кг.", mass, "масса")
+	out["весит манул"] = (&rag.CitedResult{Cited: c, Hits: mass, Check: rag.CiteCheck{Unverified: true, HasSources: true, HasQuotes: true,
+		NumbersMissing: []string{"6"}, Rejects: rag.MaxRejects, Problems: []string{"чисел ответа 6 нет ни в одной цитате"}}}).Text()
+	near, err := edgeHits(ctx, r.s, "manul", "Описание и внешний вид", "Охота и питание")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := rag.Cited{Status: rag.StatusUnknown, Answer: "в базе знаний нет продолжительности жизни манула", Clarify: "Рассказать, как манул растёт и взрослеет?",
+		Sources: []rag.CitedSource{{ChunkID: near[0].ID}, {ChunkID: near[1].ID}}}
+	out["живёт манул"] = (&rag.CitedResult{Cited: u, Hits: near, Check: rag.CiteCheck{OK: true, Relevant: 2, HasSources: true}}).Text()
+	bracket := mass[0]
+	bracket.Title = "Манул [Otocolobus manul]"
+	c = edgeAnswered("Уточните: по-латыни манул — Otocolobus manul.", []kb.Hit{bracket}, "")
+	c.Sources = append(c.Sources, rag.CitedSource{ChunkID: "manul/structure/999"})
+	out["по-латыни"] = (&rag.CitedResult{Cited: c, Hits: []kb.Hit{bracket}, Check: okCheck(c)}).Text()
 	return out
 }

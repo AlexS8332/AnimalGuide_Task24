@@ -292,6 +292,16 @@ type ModeStats struct {
 	// FalseUnknown — «не знаю» на отвечаемом вопросе.
 	ForcedUnknown int `json:"forced_unknown,omitempty"`
 	FalseUnknown  int `json:"false_unknown,omitempty"`
+	// UnknownEmpty — «не знаю» при пустой релевантной выдаче (ниже порога
+	// или ничего не найдено): источников у него нет и быть не должно.
+	// UnknownNearSources — «не знаю» с выдачей и «ближайшим в базе»
+	// (источниками). «Источники в каждом ответе» — (WithSources +
+	// UnknownNearSources) из (Answered + Unknown − UnknownEmpty).
+	UnknownEmpty       int `json:"unknown_empty,omitempty"`
+	UnknownNearSources int `json:"unknown_near_sources,omitempty"`
+	// SpeciesMismatch — answered-ответов, где назван вид без цитаты из его
+	// статьи (CiteCheck.SpeciesMismatch, мягкая метрика).
+	SpeciesMismatch int `json:"species_mismatch,omitempty"`
 
 	Usage     llm.Usage `json:"usage"`
 	Cost      llm.Cost  `json:"cost"`

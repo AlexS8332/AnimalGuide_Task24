@@ -78,7 +78,8 @@ func SearchTool(s *kb.Searcher, index string, k int) tools.Tool {
 }
 
 // searchTool — SearchTool с наблюдателем выдачи (механизм rag.cite: чьи
-// chunk_id выдавались в этом ходе); obs == nil — без наблюдения.
+// chunk_id выдавались в этом ходе и не отсёк ли вызов Gate — issued.plain);
+// obs == nil — без наблюдения.
 func searchTool(s *kb.Searcher, index string, k int, obs *issued) tools.Tool {
 	index = orIndex(index)
 	k = orK(k)
@@ -109,9 +110,15 @@ func searchTool(s *kb.Searcher, index string, k int, obs *issued) tools.Tool {
 			if err != nil {
 				return "", fmt.Errorf("поиск по базе знаний: %w", err)
 			}
-			obs.add(hits)
 			out := SearchResult{Query: in.Query, Index: info.Index, Mode: info.Mode, Fallback: info.Fallback,
 				Hits: make([]SearchHit, 0, len(hits))}
+			if obs != nil {
+				gated, why := obs.gatePlain(ctx, in.Query, hits, info)
+				obs.add(hits, gated, why)
+				if gated {
+					out.Note = searchGateNote(why)
+				}
+			}
 			for _, h := range hits {
 				out.Hits = append(out.Hits, SearchHit{ChunkID: h.ID, Title: h.Title, Section: h.Section, Path: pathOf(h.Chunk),
 					Score: math.Round(h.Score*1000) / 1000, URL: h.URL, Text: h.Text})
@@ -135,8 +142,8 @@ func PipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k i
 }
 
 // pipelineTool — PipelineTool с наблюдателем выдачи (rag.cite): выдача
-// каждого вызова копится в obs, а вызов кодом, уже посчитанный хуком ради
-// Gate (obs.pre), второй раз не ищется.
+// каждого вызова и решение Gate по его трассе копятся в obs, отсечённый
+// вызов получает пометку для модели.
 func pipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k int, obs *issued) tools.Tool {
 	k = orK(k)
 	c.Index = orIndex(c.Index)
@@ -166,15 +173,18 @@ func pipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k i
 			if in.K > 0 {
 				cc.K1 = orK(in.K)
 			}
-			t, note, ok := obs.take(in.Query, cc.K1)
-			if !ok {
-				var err error
-				t, err = p.Search(ctx, retrieve.Query{Text: in.Query, Context: history}, cc)
-				if err != nil {
-					return "", fmt.Errorf("поиск по базе знаний: %w", err)
+			t, err := p.Search(ctx, retrieve.Query{Text: in.Query, Context: history}, cc)
+			if err != nil {
+				return "", fmt.Errorf("поиск по базе знаний: %w", err)
+			}
+			note := ""
+			if obs != nil {
+				gated, why := Gate(&t, t.Hits)
+				obs.add(t.Hits, gated, why)
+				if gated {
+					note = searchGateNote(why)
 				}
 			}
-			obs.add(t.Hits)
 			out := SearchResult{Query: in.Query, Index: t.Info.Index, Mode: t.Info.Mode, Fallback: t.Info.Fallback,
 				Hits: make([]SearchHit, 0, len(t.Hits))}
 			if t.Rewritten != "" && t.Rewritten != t.Original {
@@ -204,33 +214,51 @@ func pipelineTool(p *retrieve.Pipeline, c retrieve.Config, history []string, k i
 // issued — выдача kb_search одного хода (механизм rag.cite): все фрагменты,
 // которые ведущий получил — вызовом кодом и своими вызовами, — без
 // повторов. По ней kb_answer проверяет, что chunk_id выдавались в этом
-// ходе. pre — вызов кодом, уже посчитанный хуком ради Gate: инструмент
-// отдаёт его, а не ищет второй раз (та же выдача и без второго запроса к
-// эмбеддеру); note — пометка к его ответу. Методы безопасны на nil.
+// ходе. Каждый вызов несёт и решение Gate: «только не знаю» — если отсечены
+// ВСЕ вызовы хода (Issued.Gate); релевантная выдача (open) — фрагменты
+// неотсечённых вызовов, из неё у «не знаю» берётся «ближайшее в базе».
+// plain — Gate вызова без конвейера (rag без rag.filter и rag.rewrite):
+// трассы нет, хук собирает её из выдачи (Hook.plainGate). Методы безопасны
+// на nil.
 type issued struct {
-	mu   sync.Mutex
-	hits []kb.Hit
-	seen map[string]bool
+	mu    sync.Mutex
+	hits  []kb.Hit
+	seen  map[string]bool
+	open  []kb.Hit
+	opens map[string]bool
+	calls int
+	why   string
 
-	pre      *retrieve.Trace
-	preQuery string
-	preK     int
-	preNote  string
+	plain func(ctx context.Context, query string, hits []kb.Hit, info kb.SearchInfo) (bool, string)
 }
 
-func (o *issued) add(hits []kb.Hit) {
+// add — выдача одного вызова и решение Gate по нему.
+func (o *issued) add(hits []kb.Hit, gated bool, why string) {
 	if o == nil {
 		return
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.seen == nil {
-		o.seen = map[string]bool{}
+		o.seen, o.opens = map[string]bool{}, map[string]bool{}
 	}
+	o.calls++
 	for _, h := range hits {
 		if !o.seen[h.ID] {
 			o.seen[h.ID] = true
 			o.hits = append(o.hits, h)
+		}
+	}
+	if gated {
+		if o.why == "" {
+			o.why = why
+		}
+		return
+	}
+	for _, h := range hits {
+		if !o.opens[h.ID] {
+			o.opens[h.ID] = true
+			o.open = append(o.open, h)
 		}
 	}
 }
@@ -245,19 +273,38 @@ func (o *issued) Hits() []kb.Hit {
 	return append([]kb.Hit(nil), o.hits...)
 }
 
-// take — посчитанный хуком вызов кодом, если запрос тот же (один раз).
-func (o *issued) take(query string, k int) (retrieve.Trace, string, bool) {
+// Gate — «только не знаю» по всем вызовам хода: ни один вызов не дал
+// релевантной выдачи. Причина — Gate первого отсечённого вызова.
+func (o *issued) Gate() (bool, string, []kb.Hit) {
 	if o == nil {
-		return retrieve.Trace{}, "", false
+		return true, "kb_search в этом ходе не вызывался", nil
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	if o.pre == nil || query != o.preQuery || k != o.preK {
-		return retrieve.Trace{}, "", false
+	if len(o.open) > 0 {
+		return false, "", append([]kb.Hit(nil), o.open...)
 	}
-	t, note := *o.pre, o.preNote
-	o.pre = nil
-	return t, note, true
+	switch {
+	case o.calls == 0:
+		return true, "kb_search в этом ходе не вызывался", nil
+	case len(o.hits) == 0 && o.why == "":
+		return true, "в базе знаний по вопросу ничего не найдено", nil
+	}
+	return true, o.why, nil
+}
+
+// gatePlain — Gate вызова без конвейера (o.plain); без него — только пустая
+// выдача.
+func (o *issued) gatePlain(ctx context.Context, query string, hits []kb.Hit, info kb.SearchInfo) (bool, string) {
+	if o != nil && o.plain != nil {
+		return o.plain(ctx, query, hits, info)
+	}
+	return Gate(nil, hits)
+}
+
+// searchGateNote — пометка в ответе kb_search при отсечённом вызове (rag.cite).
+func searchGateNote(why string) string {
+	return "релевантных фрагментов нет (" + why + "): ответ по существу kb_answer примет, только если другой вызов kb_search этого хода найдёт их; иначе — status unknown"
 }
 
 func joinNote(a, b string) string {

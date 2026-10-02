@@ -459,9 +459,11 @@ function kbPiece(s, start, qa, qb) {
   return kbPlain(rest, qa - start - lead, qb - start - lead);
 }
 
-// kbNorm — нормализация для поиска цитаты, как у проверки кодом: регистр,
-// ё → е, кавычки, тире, пробелы подряд — один; ударение выкинуто. map[i] —
-// индекс кодовой точки исходника для i-го символа результата.
+// kbNorm — нормализация для поиска цитаты, как у проверки кодом (Go,
+// rag.quoteNorm): регистр, ё → е, кавычки, тире — «-», пробелы подряд —
+// один, пробелы вокруг тире выкинуты («2,5 – 5,8» = «2,5—5,8»); ударение
+// выкинуто. map[i] — индекс кодовой точки исходника для i-го символа
+// результата.
 function kbNorm(cps) {
   let out = '';
   const map = [];
@@ -473,28 +475,50 @@ function kbNorm(cps) {
     else if (/[‘’‛`]/.test(ch)) ch = "'";
     else if (/[‐‑‒–—―−]/.test(ch)) ch = '-';
     else if (/\s/.test(ch)) {
-      if (!out || out.endsWith(' ')) continue;
+      if (!out || out.endsWith(' ') || out.endsWith('-')) continue;
       ch = ' ';
     }
+    if (ch === '-' && out.endsWith(' ')) { out = out.slice(0, -1); map.pop(); }
     out += ch;
     map.push(i);
   }
   return { s: out, map };
 }
 
+// kbGap — пропуск внутри цитаты, как у проверки кодом: «…», три точки и
+// больше, в том числе в скобках («[…]», «(...)»).
+const kbGap = /[\[(]?(?:…|\.{3,})[\])]?/;
+
 // kbFindQuote — где в тексте (массив кодовых точек) цитата: [a, b) или
-// null. Обрамляющие кавычки и многоточия не ищутся; цитата с пропуском
-// «…» — подсвечивается самый длинный её кусок.
+// null. Обрамляющие кавычки не ищутся. Сначала — цитата целиком; затем,
+// как проверка кодом, части между пропусками по порядку, каждая без
+// концевых « .,;:» — подсвечивается от начала первой до конца последней;
+// если по порядку не нашлись — самый длинный кусок.
 function kbFindQuote(cps, quote) {
-  const clean = String(quote || '').trim().replace(/^[«"„“\s]+|[»"”\s]+$/g, '').replace(/^(?:…|\.\.\.)\s*|\s*(?:…|\.\.\.)$/g, '');
+  const clean = String(quote || '').trim().replace(/^[«"„“\s]+|[»"”\s]+$/g, '');
   if (!clean) return null;
-  const parts = [clean].concat(clean.split(/\s*(?:…|\.\.\.)\s*/).filter(x => x.length > 3).sort((a, b) => b.length - a.length));
   const t = kbNorm(cps);
+  const norm = p => kbNorm(Array.from(p)).s.trim();
+  const span = (a, b) => [t.map[a], t.map[b - 1] + 1];
+  const whole = norm(clean);
+  if (whole) {
+    const i = t.s.indexOf(whole);
+    if (i >= 0) return span(i, i + whole.length);
+  }
+  const parts = clean.split(kbGap).map(p => norm(p).replace(/^[\s.,;:]+|[\s.,;:]+$/g, '')).filter(Boolean);
+  if (!parts.length) return null;
+  let from = 0, first = -1, ok = true;
   for (const p of parts) {
-    const n = kbNorm(Array.from(p)).s.trim();
-    if (!n) continue;
-    const i = t.s.indexOf(n);
-    if (i >= 0) return [t.map[i], t.map[i + n.length - 1] + 1];
+    const i = t.s.indexOf(p, from);
+    if (i < 0) { ok = false; break; }
+    if (first < 0) first = i;
+    from = i + p.length;
+  }
+  if (ok) return span(first, from);
+  for (const p of parts.slice().sort((a, b) => b.length - a.length)) {
+    if (p.length <= 3) continue;
+    const i = t.s.indexOf(p);
+    if (i >= 0) return span(i, i + p.length);
   }
   return null;
 }
@@ -1771,17 +1795,6 @@ function kbCitedHTML(a) {
   const badges = kbCheckBadgesHTML(c, ch);
   const problems = kbList(ch.problems).length
     ? `<details class="kb-problems"><summary>Замечания проверки: ${esc(ch.problems.length)}</summary><ul>${ch.problems.map(x => `<li>${esc(x)}</li>`).join('')}</ul></details>` : '';
-  if (c.status === 'unknown') {
-    return `<div class="kb-cited" data-status="unknown" data-forced="${ch.forced ? 1 : 0}">
-      ${badges}
-      <div class="kb-unknown"><b>Не знаю</b>${c.answer ? ' — ' + esc(c.answer) : ''}
-        ${c.clarify ? `<div class="kb-clarify"><span class="kb-clarify-l">Уточните:</span> ${esc(c.clarify)}</div>` : '<div class="kb-clarify none hint">уточняющего вопроса нет</div>'}
-        ${ch.forced ? '<div class="kb-forced" data-forced="1">решил код: релевантность ниже порога — ответить по существу было нечем</div>'
-          : '<div class="kb-forced hint" data-forced="0">решила модель: в найденных фрагментах ответа нет</div>'}</div>
-      ${problems}
-    </div>`;
-  }
-  const answer = esc(c.answer || '').replace(/\[(\d{1,2})\]/g, '<sup class="kb-cited-ref">[$1]</sup>');
   const notV = new Set(kbList(ch.not_verbatim));
   const unknownIDs = new Set(kbList(ch.unknown_ids));
   const srcHTML = srcs.map((s, i) => {
@@ -1790,6 +1803,18 @@ function kbCitedHTML(a) {
     return `<button type="button" class="kb-cited-src${bad ? ' unknown' : ''}" ${kbChunkAttrs(s.chunk_id)} data-n="${i + 1}" data-action="kbOpenChunk" data-arg="${esc(s.chunk_id)}" title="${esc(bad ? 'этого фрагмента не было в выдаче хода' : 'открыть фрагмент в тексте документа')}">
       <span class="kb-cited-n">[${i + 1}]</span> ${w ? `<b>${esc(w.title)}</b> › ${esc(w.section)}` : '<b>не из выдачи</b>'} <code>${esc(s.chunk_id)}</code></button>`;
   }).join('');
+  if (c.status === 'unknown') {
+    return `<div class="kb-cited" data-status="unknown" data-forced="${ch.forced ? 1 : 0}">
+      ${badges}
+      <div class="kb-unknown"><b>Не знаю</b>${c.answer ? ' — ' + esc(c.answer) : ''}
+        ${c.clarify ? `<div class="kb-clarify"><span class="kb-clarify-l">Уточните:</span> ${esc(c.clarify)}</div>` : '<div class="kb-clarify none hint">уточняющего вопроса нет</div>'}
+        ${ch.forced ? `<div class="kb-forced" data-forced="1">решил код: ${esc(ch.gate_reason || 'релевантность ниже порога — ответить по существу было нечем')}</div>`
+          : '<div class="kb-forced hint" data-forced="0">решила модель: в найденных фрагментах ответа нет</div>'}</div>
+      ${srcs.length ? `<div class="kb-cited-srcs near"><div class="kb-cited-h">Ближайшее в базе <span class="hint">— что нашлось рядом с вопросом</span></div>${srcHTML}</div>` : ''}
+      ${problems}
+    </div>`;
+  }
+  const answer = esc(c.answer || '').replace(/\[(\d{1,2})\]/g, '<sup class="kb-cited-ref">[$1]</sup>');
   const quotes = kbList(c.quotes).map((x, i) => {
     const n = num1(x.chunk_id);
     const bad = notV.has(i);

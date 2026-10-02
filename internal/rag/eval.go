@@ -132,7 +132,7 @@ func Eval(ctx context.Context, a *Answerer, qs kb.QuestionSet, o EvalOptions) (R
 					// Смысл ответа против его цитат — отдельный запрос судьи
 					// смысла (v24): вердикт «верно по эталону» и «сказано в
 					// цитатах» — разные вопросы.
-					sp, err := o.Judge.CheckSupport(ctx, c.Cited)
+					sp, err := o.Judge.CheckSupportOf(ctx, c.Cited, c.Hits)
 					rep.JudgeCost = rep.JudgeCost.Add(sp.Cost)
 					if ctx.Err() != nil {
 						return rep, ctx.Err()
@@ -343,9 +343,18 @@ func citeStats(st *ModeStats, q kb.Question, r CitedResult, sp *Support, quotes,
 		if q.Answerable {
 			st.FalseUnknown++
 		}
+		switch {
+		case r.Check.Relevant == 0:
+			st.UnknownEmpty++
+		case len(r.Cited.Sources) > 0:
+			st.UnknownNearSources++
+		}
 		return
 	}
 	st.Answered++
+	if len(r.Check.SpeciesMismatch) > 0 {
+		st.SpeciesMismatch++
+	}
 	if r.Check.HasSources {
 		st.WithSources++
 	}
@@ -480,10 +489,14 @@ func conclude(r Report) []string {
 
 // citeLine — вывод по rag+cite числами.
 func citeLine(s ModeStats) string {
-	line := fmt.Sprintf("%s: ответов по существу %d, «не знаю» %d (по решению кода %d, на отвечаемых вопросах %d); "+
-		"с источниками %d из %d, с цитатами %d из %d, дословных цитат %.0f %%; не проверено %d, отказов проверки %d",
-		s.Mode, s.Answered, s.Unknown, s.ForcedUnknown, s.FalseUnknown, s.WithSources, s.Answered, s.WithQuotes, s.Answered,
+	line := fmt.Sprintf("%s: ответов по существу %d, «не знаю» %d (по решению кода %d, на отвечаемых вопросах %d, при пустой выдаче %d); "+
+		"с источниками %d из %d (по существу и «не знаю» с выдачей), с цитатами %d из %d, дословных цитат %.0f %%; не проверено %d, отказов проверки %d",
+		s.Mode, s.Answered, s.Unknown, s.ForcedUnknown, s.FalseUnknown, s.UnknownEmpty,
+		s.WithSources+s.UnknownNearSources, s.Answered+s.Unknown-s.UnknownEmpty, s.WithQuotes, s.Answered,
 		100*s.Verbatim, s.Unverified, s.Rejects)
+	if s.SpeciesMismatch > 0 {
+		line += fmt.Sprintf("; вид без цитаты из своей статьи — %d", s.SpeciesMismatch)
+	}
 	if s.SupportChecked > 0 {
 		line += fmt.Sprintf("; смысл подтверждён цитатами у %d из %d", s.Supported, s.SupportChecked)
 	}

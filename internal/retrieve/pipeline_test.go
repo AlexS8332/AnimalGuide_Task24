@@ -656,3 +656,75 @@ func TestSearchScope(t *testing.T) {
 		t.Fatalf("рамка не сработала: %s", reasons(tr))
 	}
 }
+
+// TestFinishScopePerSpecies — у каждого названного вида свой ориентир
+// относительного порога: «харза или соболь» — статья о соболе дальше от
+// запроса, и порог от лучшего фрагмента харзы отсекал бы её целиком.
+func TestFinishScopePerSpecies(t *testing.T) {
+	docs := []corpus.Doc{
+		{ID: "kharza", Title: "Харза", Species: &corpus.Species{Ru: "харза"}},
+		{ID: "sable", Title: "Соболь", Species: &corpus.Species{Ru: "соболь"}},
+		{ID: "marten", Title: "Лесная куница", Species: &corpus.Species{Ru: "лесная куница"}},
+	}
+	tr := trace(Config{Filter: true, Scope: true},
+		cand("kh1", "kharza", 0, 9, 0.84, 1),
+		cand("other", "marten", 0, 9, 0.85, 2), // чужой вид
+		cand("kh2", "kharza", 10, 19, 0.83, 3),
+		cand("ov", "mustelidae", 0, 9, 0.80, 4), // обзор: от лучшего в рамке (0.84)
+		cand("sb1", "sable", 0, 9, 0.78, 5),     // хуже харзы на 0.06, но лучший у соболя
+		cand("sb2", "sable", 10, 19, 0.77, 6),
+		cand("sb3", "sable", 20, 29, 0.70, 7), // хуже лучшего соболя на 0.08
+	)
+	tr.Anchored = []string{"харза", "соболь"}
+	tr.cos = []map[string]float64{{"kh1": 0.84, "other": 0.85, "kh2": 0.83, "ov": 0.80, "sb1": 0.78, "sb2": 0.77, "sb3": 0.70}}
+	leads(&tr, tr.cos)
+	scopeOf(AliasesOf(docs), &tr)
+	tr.Config.K1 = 10
+	finish(&tr)
+	want := "kh1:ok other:другой вид kh2:ok ov:ok sb1:ok sb2:ok sb3:хуже лучшего на 0.05"
+	if got := reasons(tr); got != want {
+		t.Fatalf("причины:\n%s\nждали\n%s", got, want)
+	}
+	// Мало места (K1 = 3): лучший фрагмент соболя всё равно в выдаче — за
+	// счёт последнего места харзы и обзора.
+	tr.Config.K1 = 3
+	finish(&tr)
+	want = "kh1:ok other:другой вид kh2:ok ov:за пределами K1 sb1:ok sb2:за пределами K1 sb3:хуже лучшего на 0.05"
+	if got := reasons(tr); got != want || len(tr.Hits) != 3 || tr.Hits[2].ID != "sb1" || tr.Hits[2].Rank != 3 {
+		t.Fatalf("K1 = 3:\n%s\nждали\n%s", got, want)
+	}
+	// Один вид — без оговорённых мест: как раньше.
+	tr.Scope, tr.Anchored = []string{"kharza"}, []string{"харза"}
+	finish(&tr)
+	if got := reasons(tr); !strings.HasPrefix(got, "kh1:ok other:другой вид kh2:ok ov:ok sb1:другой вид") {
+		t.Fatalf("один вид: %s", got)
+	}
+}
+
+// TestSearchScopeAmbiguous — неоднозначное название в реплике («медведь»:
+// словарь его не раскрывает) снимает рамку: иначе рамка по корсаку отсекла
+// бы статью о медведе, о котором тоже спросили.
+func TestSearchScopeAmbiguous(t *testing.T) {
+	p := miniPipeline(t)
+	tr, err := p.Search(context.Background(), Query{Text: "Сколько весит корсак и чем питается медведь?"},
+		Config{Filter: true, Scope: true, Delta: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(tr.Anchored, ",") != "корсак" || len(tr.Scope) != 0 || !strings.Contains(tr.Note, "рамка якоря не применена: в реплике неоднозначное название «медведь»") {
+		t.Fatalf("рамка: якорь %v, рамка %v, заметка %q", tr.Anchored, tr.Scope, tr.Note)
+	}
+	for _, c := range tr.Candidates {
+		if c.Reason == ReasonScope {
+			t.Fatalf("отсечено рамкой: %s", c.ID)
+		}
+	}
+	// Без неоднозначного названия рамка на месте.
+	tr, err = p.Search(context.Background(), Query{Text: "Сколько весит корсак?"}, Config{Filter: true, Scope: true, Delta: 1})
+	if err != nil || strings.Join(tr.Scope, ",") != "corsac" {
+		t.Fatalf("рамка корсака: %v %v", tr.Scope, err)
+	}
+	if al, err := p.Names(context.Background()); err != nil || al == nil || len(al.Docs) == 0 {
+		t.Fatalf("словарь конвейера: %v", err)
+	}
+}

@@ -2080,7 +2080,7 @@
     spyFetch();
     await booted();
     window.__xss = undefined;
-    await until('три хода', () => qa('#feed .turn').length === 3, 8000);
+    await until('шесть ходов', () => qa('#feed .turn').length === 6, 8000);
 
     await check('чат: источники — чипы «[1] Манул › Охота и питание»', async () => {
       const b = citeTurn(0).querySelector('.bubble.reply.cited');
@@ -2156,6 +2156,69 @@
       assert(window.__xss === undefined, 'исполнился код: __xss=' + window.__xss);
     });
 
+    await check('чат: «не проверено» — плашка, чипы помечены', async () => {
+      const b = citeTurn(3).querySelector('.bubble.reply.cited');
+      assert(b && b.classList.contains('unverified'), 'ответ не распознан как «не проверено»');
+      const u = b.querySelector('.reply-unverified');
+      assert(u && u.textContent.includes('Не проверено') && u.textContent.includes('чисел ответа 6'), 'плашка: ' + (u && u.textContent));
+      assert(!b.querySelector('.reply-text').textContent.includes('Не проверено'), 'пометка осталась в тексте');
+      const chips = [...b.querySelectorAll('.src-chip')];
+      assert(chips.length === 1 && chips[0].classList.contains('unverified') && chips[0].querySelector('.src-unv').textContent === 'не проверено', 'чипы: ' + chips.map(c => c.outerHTML));
+      assert(b.querySelector('details.src-quotes summary').textContent.includes('не проверено'), 'цитаты не помечены');
+    });
+
+    await check('чат: «не знаю» с ближайшим найденным — чипы под плашкой', async () => {
+      const b = citeTurn(4).querySelector('.bubble.reply.cited');
+      assert(b && b.querySelector('.reply-unknown'), 'нет плашки');
+      assert(b.querySelector('.reply-clarify-q').textContent.includes('Рассказать, как манул растёт'), 'уточнение: ' + b.querySelector('.reply-clarify-q').textContent);
+      assert(b.querySelector('.src-near-h') && b.querySelector('.src-chips.near'), 'нет «Ближайшее в базе»');
+      const chips = [...b.querySelectorAll('.src-chip')];
+      assert(chips.length === 2 && chips[0].textContent.startsWith('[1] Манул ›') && !chips[0].classList.contains('unverified'), 'чипы: ' + chips.map(c => c.textContent));
+      assert(!b.querySelector('.reply-text'), 'ближайшее ушло в текст');
+    });
+
+    await check('чат: источник без заголовка, «[» в заголовке, ответ со слова «Уточните»', async () => {
+      const b = citeTurn(5).querySelector('.bubble.reply.cited');
+      assert(b && !b.querySelector('.reply-unknown') && !b.querySelector('.reply-clarify'), 'ответ принят за «не знаю»');
+      assert(b.querySelector('.reply-text').textContent.includes('Уточните: по-латыни манул'), 'текст: ' + b.querySelector('.reply-text').textContent);
+      const chips = [...b.querySelectorAll('.src-chip')];
+      assert(chips.length === 2, 'чипов ' + chips.length + ': ' + chips.map(c => c.textContent));
+      assert(chips[0].textContent.startsWith('[1] Манул [Otocolobus manul] ›') && /^manul\/structure\/\d{3}$/.test(chips[0].dataset.chunk), 'чип с «[»: ' + chips[0].textContent + ' / ' + chips[0].dataset.chunk);
+      assert(chips[1].textContent === '[2] manul/structure/999' && chips[1].dataset.chunk === 'manul/structure/999', 'чип без заголовка: ' + chips[1].textContent);
+    });
+
+    await check('чат: итог хода (extras rag.cite) — «не проверено» и «решил код» из проверки', async () => {
+      const t0 = app.conv.turnList[0], t1 = app.conv.turnList[1];
+      const keep = [t0.extras, t1.extras];
+      t0.extras = Object.assign({}, t0.extras, { 'rag.cite': { check: { unverified: true, problems: ['цитата 2 не найдена дословно'] } } });
+      t1.extras = Object.assign({}, t1.extras, { 'rag.cite': { check: { forced: true }, gated: true, gate_reason: 'фильтр отсёк всё' } });
+      try {
+        renderFeed();
+        const b0 = citeTurn(0).querySelector('.bubble.reply.cited');
+        assert(b0.querySelector('.reply-unverified') && b0.querySelector('.reply-unverified').textContent.includes('цитата 2 не найдена дословно'), 'нет плашки из extras');
+        assert([...b0.querySelectorAll('.src-chip')].every(c => c.classList.contains('unverified')), 'чипы не помечены');
+        const f = citeTurn(1).querySelector('.reply-forced');
+        assert(f && f.textContent.includes('решил код: фильтр отсёк всё'), 'нет пометки «решил код»: ' + (f && f.textContent));
+      } finally {
+        t0.extras = keep[0];
+        t1.extras = keep[1];
+        renderFeed();
+      }
+      assert(!citeTurn(0).querySelector('.reply-unverified'), 'плашка осталась после восстановления');
+    });
+
+    await check('чат: поиск цитаты в чанке — как проверка кодом', async () => {
+      const t = Array.from('Типичная длина тела самцов равняется 50—72 см при массе в 2,5—5,8 кг, самок — до 62 см при массе 1,1—3,8 кг.');
+      const at = (q) => { const f = kbFindQuote(t, q); return f ? t.slice(f[0], f[1]).join('') : null; };
+      assert(at('при массе в 2,5 – 5,8 кг') === 'при массе в 2,5—5,8 кг', 'тире с пробелами: ' + at('при массе в 2,5 – 5,8 кг'));
+      assert(at('самцов равняется 50—72 см […] самок — до 62 см.') === 'самцов равняется 50—72 см при массе в 2,5—5,8 кг, самок — до 62 см', '«[…]» и концевая точка: ' + at('самцов равняется 50—72 см […] самок — до 62 см.'));
+      assert(at('самцов равняется 50-72 см.') === 'самцов равняется 50—72 см', 'концевая точка: ' + at('самцов равняется 50-72 см.'));
+      assert(at('«самцов равняется 50 - 72 см»') === 'самцов равняется 50—72 см', 'кавычки: ' + at('«самцов равняется 50 - 72 см»'));
+      assert(at('совсем другой текст') === null, 'нашлось несуществующее');
+      const p = citeParse('Уточните: латынь — Otocolobus manul.\n\n**Источники:**\n[1] `manul/structure/001`');
+      assert(p && p.unknown === null && p.clarify === '' && p.body.startsWith('Уточните:') && p.sources.length === 1 && p.sources[0].label === '', 'разбор: ' + JSON.stringify(p));
+    });
+
     await check('чат: обычный ответ не тронут', async () => {
       assert(!qa('#feed .bubble.reply:not(.cited)').some(b => b.querySelector('.src-chip, .reply-unknown')), 'чипы у обычного ответа');
     });
@@ -2175,7 +2238,7 @@
   };
   scenarios['shot-chat-cite'] = async () => {
     await booted();
-    await until('три хода', () => qa('#feed .turn').length === 3, 8000);
+    await until('шесть ходов', () => qa('#feed .turn').length === 6, 8000);
     await sleep(300);
     const d = q('#feed details.src-quotes');
     if (d) d.open = true;

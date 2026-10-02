@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/agent"
+	"github.com/AlexS8332/AnimalGuide_Task24/internal/corpus"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/kb"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/llm"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/llm/llmtest"
@@ -122,6 +123,16 @@ func TestGate(t *testing.T) {
 	if g, why := Gate(tr, nil); !g || why != "фильтр релевантности отсёк все фрагменты: лучший косинус 0.812 ниже порога 0.829" {
 		t.Fatalf("фильтр: %v %q", g, why)
 	}
+	// Без фильтра (трасса из выдачи): вид не назван и косинус ниже порога —
+	// «не знаю»; вид назван — решает модель.
+	tr = &retrieve.Trace{TopDense: 0.812, MinScore: 0.829, Info: kb.SearchInfo{Mode: kb.Dense}, Hits: hits}
+	if g, why := Gate(tr, tr.Hits); !g || why != "вид в вопросе не назван, а лучший косинус 0.812 ниже порога 0.829" {
+		t.Fatalf("без фильтра: %v %q", g, why)
+	}
+	tr.Anchored = []string{"малая панда"}
+	if g, _ := Gate(tr, tr.Hits); g {
+		t.Fatal("без фильтра с якорем")
+	}
 	// Якорный вопрос с непустой выдачей — не «не знаю»: «аспекта нет» решает модель.
 	tr = &retrieve.Trace{Anchored: []string{"харза"}, TopDense: 0.884, Gap: 0.018, Hits: hits}
 	if g, _ := Gate(tr, tr.Hits); g {
@@ -198,8 +209,8 @@ func TestFinisher(t *testing.T) {
 		t.Fatalf("числа: %v", err)
 	}
 	res, err = f.Handle(ctx, "c", args(nums))
-	if r, _ = res.(*CitedResult); err != nil || !r.Check.OK || strings.Join(r.Check.NumbersMissing, ",") != "24" {
-		t.Fatalf("числа второй раз: %+v %v", res, err)
+	if r, _ = res.(*CitedResult); err != nil || !r.Check.OK || strings.Join(r.Check.NumbersMissing, ",") != "24" || r.Check.Rejects != 0 {
+		t.Fatalf("числа второй раз (отказ только из-за чисел — не в счёт): %+v %v", res, err)
 	}
 
 	// Только unknown (Gate): answered — отказ «контекст слабый…», unknown —
@@ -232,9 +243,152 @@ func TestFinisher(t *testing.T) {
 	if _, err := f.Handle(ctx, "c", args(good)); err == nil || !strings.Contains(err.Error(), "в выдаче нет фрагментов") {
 		t.Fatalf("пустая выдача: %v", err)
 	}
-	// Битые аргументы — отказ.
+	// Битые аргументы — отказ; после MaxRejects — «не знаю» с пометкой
+	// «не проверено», а не бесконечный цикл.
 	if _, err := f.Handle(ctx, "c", json.RawMessage(`{"status":`)); err == nil || !strings.Contains(err.Error(), "не разобраны") {
 		t.Fatalf("битые: %v", err)
+	}
+	f = Finisher(func() []kb.Hit { return hits }, false, "")
+	for i := 0; i < MaxRejects; i++ {
+		if _, err := f.Handle(ctx, "c", json.RawMessage(`{"status":`)); err == nil {
+			t.Fatalf("битые, отказ %d", i+1)
+		}
+	}
+	res, err = f.Handle(ctx, "c", json.RawMessage(`{"status":`))
+	if r, _ = res.(*CitedResult); err != nil || !r.Cited.Unknown() || !r.Check.Unverified || r.Check.Rejects != MaxRejects ||
+		!strings.HasPrefix(r.Text(), "Не знаю: "+unverifiedAnswer) || len(r.Cited.Sources) != 2 || !strings.Contains(r.Check.Problems[0], "не разобраны") {
+		t.Fatalf("битые после отказов: %+v %v", r, err)
+	}
+}
+
+// TestFinisherGateAndNearest — «только unknown» в момент вызова (Gate) и
+// «ближайшее в базе» у «не знаю».
+func TestFinisherGateAndNearest(t *testing.T) {
+	ctx := context.Background()
+	hits := citeHits()
+	rp := hits[0].ID
+	good := cited("Малая панда ест по 13 часов в день.", []string{rp}, [2]string{rp, "На приёмы пищи они тратят по 13 часов в день"})
+	gated := true
+	f := FinisherOf(FinishOptions{Hits: func() []kb.Hit { return hits }, Gate: func() (bool, string, []kb.Hit) {
+		if gated {
+			return true, "фильтр отсёк всё", nil
+		}
+		return false, "", hits[:1]
+	}})
+	// Схема в чате — без ограничения: решение не известно до хода.
+	if strings.Contains(string(f.Parameters), `"enum":["unknown"]`) {
+		t.Fatal("схема с ограничением")
+	}
+	if _, err := f.Handle(ctx, "c", args(good)); err == nil || !strings.Contains(err.Error(), onlyUnknownProblem+" (фильтр отсёк всё)") {
+		t.Fatalf("gate: %v", err)
+	}
+	// Другой поиск хода нашёл фрагменты — ответ принят.
+	gated = false
+	res, err := f.Handle(ctx, "c", args(good))
+	r, _ := res.(*CitedResult)
+	if err != nil || !r.Check.OK || r.Check.Gated || r.Check.Relevant != 1 || r.Check.Rejects != 1 {
+		t.Fatalf("после второго поиска: %+v %v", r, err)
+	}
+
+	// «Не знаю» с выдачей — ближайшее найденное: источники модели из
+	// релевантной выдачи, иначе — первые фрагменты выдачи.
+	f = Finisher(func() []kb.Hit { return hits }, false, "")
+	res, err = f.Handle(ctx, "c", args(Cited{Status: StatusUnknown, Answer: "в базе знаний нет данных о сне малой панды", Clarify: "Рассказать о питании?",
+		Sources: []CitedSource{{ChunkID: hits[1].ID}, {ChunkID: "x/structure/009"}}}))
+	r, _ = res.(*CitedResult)
+	if err != nil || !r.Check.OK || r.Check.Forced || !r.Check.HasSources || r.Check.Relevant != 2 ||
+		fmt.Sprint(r.Cited.Sources) != "[{"+hits[1].ID+"}]" {
+		t.Fatalf("unknown с источником модели: %+v %v", r, err)
+	}
+	want := "Не знаю: в базе знаний нет данных о сне малой панды\n\nУточните: Рассказать о питании?\n\n**Ближайшее в базе:**\n[1] Харза › Вступление (`kharza/structure/002`)"
+	if r.Text() != want {
+		t.Fatalf("текст:\n%s\nждали\n%s", r.Text(), want)
+	}
+	if v := ViewOf(r); len(v.Sources) != 1 || !v.Sources[0].Issued || v.Sources[0].Title != "Харза" {
+		t.Fatalf("окно: %+v", v.Sources)
+	}
+	f = Finisher(func() []kb.Hit { return hits }, false, "")
+	res, _ = f.Handle(ctx, "c", args(Cited{Status: StatusUnknown, Clarify: "О чём именно?"}))
+	if r, _ = res.(*CitedResult); len(r.Cited.Sources) != 2 || r.Cited.Sources[0].ChunkID != rp {
+		t.Fatalf("unknown без источников модели: %+v", r.Cited.Sources)
+	}
+	// Пустая выдача (Gate) — «не знаю» без источников.
+	f = Finisher(func() []kb.Hit { return nil }, true, "ниже порога")
+	res, _ = f.Handle(ctx, "c", args(Cited{Status: StatusUnknown, Clarify: "О чём именно?", Sources: []CitedSource{{ChunkID: rp}}}))
+	if r, _ = res.(*CitedResult); len(r.Cited.Sources) != 0 || r.Check.Relevant != 0 || !r.Check.Forced || strings.Contains(r.Text(), "Ближайшее") {
+		t.Fatalf("unknown без выдачи: %+v", r)
+	}
+	// Оборванный ход — «не знаю» с пометкой и ближайшим найденным.
+	u := UnverifiedResult(agent.ErrProtocol, hits, hits)
+	if !u.Check.Unverified || !u.Cited.Unknown() || len(u.Cited.Sources) != 2 || !strings.Contains(u.Text(), "**Ближайшее в базе:**") ||
+		!strings.Contains(u.Check.Problems[0], "текстом") {
+		t.Fatalf("оборванный ход: %+v", u)
+	}
+}
+
+// TestQuoteProblem — пропуск «…» по порядку частей, короткий и без
+// отрицаний; пробелы вокруг тире.
+func TestQuoteProblem(t *testing.T) {
+	kharza := "Типичная длина тела (не считая хвоста) самцов равняется 50—72 см при массе в 2,5—5,8 кг, самок — до 62 см при массе 1,1—3,8 кг. " +
+		"По другим данным, длина тела — 75-80 см. Как правило, длина хвоста взрослых особей составляет 35—40 см (около ⅔ всей длины тела). " +
+		"Харза может дорастать до 75—80 см (не учитывая хвост), а длина её хвоста иногда достигает 45 см. " +
+		"Харза не опасна для человека и избегает встреч с ним."
+	cases := []struct {
+		quote, want string
+	}{
+		{"самцов равняется 50—72 см … при массе в 2,5—5,8 кг", ""},
+		{"самцов … при массе в 2,5 – 5,8 кг", ""},                   // пробелы вокруг тире
+		{"при массе в 2,5 - 5,8 кг, самок — до 62 см.", ""},         // концевая точка
+		{"самцов равняется 50—72 см [...] самок — до 62 см", ""},    // «[…]»
+		{"самок … при массе в 2,5—5,8 кг", gapProblem},              // части не по порядку
+		{"Харза … опасна для человека", gapProblem},                 // пропущено «не»
+		{"Типичная длина тела … избегает встреч с ним", gapProblem}, // пропуск длиннее 200
+		{"при массе в 3—5 кг, самок", "не найдена во фрагменте дословно"},
+	}
+	for _, c := range cases {
+		got := quoteProblem(c.quote, kharza)
+		if (c.want == "" && got != "") || (c.want != "" && !strings.Contains(got, c.want)) {
+			t.Errorf("%q: %q, ждали %q", c.quote, got, c.want)
+		}
+	}
+	// В Check: отказ с подсказкой без «…».
+	h := kb.Hit{Chunk: kb.Chunk{ID: "kharza/structure/002", DocID: "kharza", Text: kharza}}
+	ck := Check(cited("Харза опасна для человека.", []string{h.ID}, [2]string{h.ID, "Харза … опасна для человека"}), []kb.Hit{h}, true)
+	if ck.OK || !strings.Contains(strings.Join(ck.Problems, ";"), "пропуск в цитате меняет смысл: процитируй без «…»") {
+		t.Fatalf("Check: %+v", ck)
+	}
+}
+
+// TestCheckNumbersAndSpecies — числа вопроса и версии не требуют цитаты;
+// вид в ответе против статьи цитаты (SpeciesMismatch, без отказа).
+func TestCheckNumbersAndSpecies(t *testing.T) {
+	h := kb.Hit{Chunk: kb.Chunk{ID: "manul/structure/022", DocID: "manul", Title: "Манул", Text: "Численность манула в 2020 году оценивалась в 15 тысяч особей."}}
+	c := cited("По MDD v2.5 в 2020 году манулов было около 15 тысяч.", []string{h.ID}, [2]string{h.ID, "оценивалась в 15 тысяч особей"})
+	ck := CheckWith(c, []kb.Hit{h}, CheckOptions{StrictNumbers: true, Question: "Сколько манулов было в 2020 году?"})
+	if !ck.OK || len(ck.NumbersMissing) != 0 {
+		t.Fatalf("числа вопроса и версия: %+v", ck)
+	}
+	if ck = Check(c, []kb.Hit{h}, true); ck.OK || strings.Join(ck.NumbersMissing, ",") != "2020" {
+		t.Fatalf("без вопроса 2020 — без цитаты: %+v", ck)
+	}
+
+	docs := []corpus.Doc{
+		{ID: "kharza", Title: "Харза", Species: &corpus.Species{Ru: "харза"}},
+		{ID: "sable", Title: "Соболь", Species: &corpus.Species{Ru: "соболь"}},
+		{ID: "mustelidae", Title: "Куньи"},
+	}
+	al := retrieve.AliasesOf(docs)
+	sable := kb.Hit{Chunk: kb.Chunk{ID: "sable/structure/003", DocID: "sable", Title: "Соболь", Text: "Масса самцов — от 880 до 1800 г."}}
+	over := kb.Hit{Chunk: kb.Chunk{ID: "mustelidae/structure/001", DocID: "mustelidae", Title: "Куньи", Text: "Харза — самая крупная куница, масса до 5,8 кг."}}
+	hits := []kb.Hit{sable, over}
+	c = cited("Харза весит от 880 до 1800 г.", []string{sable.ID}, [2]string{sable.ID, "Масса самцов — от 880 до 1800 г."})
+	if ck = CheckWith(c, hits, CheckOptions{StrictNumbers: true, Names: al}); !ck.OK || strings.Join(ck.SpeciesMismatch, ",") != "харза" {
+		t.Fatalf("вид не из своей статьи: %+v", ck)
+	}
+	// Обзорная статья, где вид назван в цитате, — подтверждение.
+	c = cited("Харза весит до 5,8 кг.", []string{over.ID}, [2]string{over.ID, "Харза — самая крупная куница, масса до 5,8 кг"})
+	if ck = CheckWith(c, hits, CheckOptions{Names: al}); !ck.OK || len(ck.SpeciesMismatch) != 0 {
+		t.Fatalf("обзор с видом: %+v", ck)
 	}
 }
 
@@ -299,6 +453,13 @@ func TestCheckSupport(t *testing.T) {
 		strings.Contains(m[1].Content, "structure/013") || strings.Contains(m[1].Content, "в базе знаний") {
 		t.Fatalf("вход судьи смысла (Blind): %q", m[1].Content)
 	}
+	// С выдачей — у цитаты статья и раздел; правило «вид — по своей статье».
+	if _, err := j.CheckSupportOf(context.Background(), c, citeHits()); err != nil ||
+		!strings.Contains(got[1].Messages[1].Content, "[1] (Малая панда › Образ жизни › Питание) «На приёмы пищи") ||
+		!strings.Contains(SupportSystem(), "Утверждение о виде X подтверждается только цитатой из статьи о виде X") {
+		t.Fatalf("вход судьи с выдачей: %v %q", err, got[1].Messages[1].Content)
+	}
+	got = got[:1]
 	// «Не знаю» — без запроса.
 	sp, err = j.CheckSupport(context.Background(), Cited{Status: StatusUnknown})
 	if err != nil || !sp.OK || len(got) != 1 {

@@ -639,6 +639,48 @@ func (a *Aliases) Species(text string) []string {
 	return out
 }
 
+// Ambiguous — неоднозначные названия в тексте (правило 2): однословные
+// синонимы, которые входят в название другого вида и потому не раскрываются
+// («рысь», «барс», «медведь»), — как написано в тексте, по порядку. Слова,
+// вошедшие в найденное название («степная рысь», «белый медведь»), не в
+// счёт; через дефис и омонимы-действия — тоже (правило 6). Сказать «рысь» —
+// назвать какой-то вид, но не сказать какой: рамка якоря по другим
+// названным видам тогда отсекла бы его статью (Pipeline.Search).
+func (a *Aliases) Ambiguous(text string) []string {
+	if a == nil || len(a.Canon) == 0 {
+		return nil
+	}
+	ix := a.index()
+	toks := tokenize(text)
+	used := make([]bool, len(toks))
+	for _, m := range a.matches(text) {
+		for j := m.from; j < m.to; j++ {
+			used[j] = true
+		}
+	}
+	var out []string
+	seen := map[string]bool{}
+	for i, t := range toks {
+		if used[i] || t.hyph {
+			continue
+		}
+		for _, e := range ix.entries {
+			if len(e.stems) != 1 || e.canonical || !e.ambiguous || !sameStem(t.stem, e.stems[0]) {
+				continue
+			}
+			if i > 0 && homonymBefore(e.stems[0], toks[i-1]) {
+				continue
+			}
+			if w := text[t.from:t.to]; !seen[t.stem] {
+				seen[t.stem] = true
+				out = append(out, w)
+			}
+			break
+		}
+	}
+	return out
+}
+
 func containsFold(s, sub string) bool {
 	return strings.Contains(corpus.Normalize(s), corpus.Normalize(sub))
 }

@@ -328,7 +328,7 @@ function turnHTML(t, state, shown) {
   if (t.status === 'failed') {
     html += `<div class="bubble reply error">Ход не удался: ${esc(t.error)}</div>`;
   } else if (t.reply && !(t.route === 'card' && (t.cards || []).some(d => d.kind === 'card'))) {
-    html += replyHTML(t.reply);
+    html += replyHTML(t.reply, t.extras && t.extras['rag.cite']);
   }
   html += chipsHTML(t);
   html += `<div class="turn-meta">
@@ -2117,29 +2117,53 @@ function citeUnquote(s) {
 }
 
 // citeParse — разбор ответа kb_answer: {body, sources[{n, label, id}],
-// quotes[{n, id, text}], unknown, clarify}; ответ не того вида — null.
+// near, quotes[{n, id, text}], unknown, clarify, unverified}; ответ не того
+// вида — null.
+//
+// «Не знаю: …» — только первой строкой ответа, «Уточните: …» — только после
+// него (ответ по существу может начинаться с этого слова). Источники —
+// по одному на строку («[1] Статья › Раздел (`id`)», без выдачи —
+// «[1] `id`», в заголовке может быть «[»), старый вид — несколько через
+// «; » в строке. «**Ближайшее в базе:**» — источники «не знаю» (near).
+// Строка «_Не проверено: …_» — где угодно: что не так с ответом.
 function citeParse(text) {
   const lines = String(text || '').replace(/\r/g, '').split('\n');
+  let unverified = null;
+  lines.forEach((l, i) => {
+    const m = citeStrip(l).match(/^_?\s*Не проверено\s*:\s*(.*?)\s*_?$/i);
+    if (m && unverified === null) { unverified = m[1].replace(/\.$/, '').trim(); lines[i] = ''; }
+  });
   const head = re => lines.findIndex(l => re.test(citeStrip(l)));
-  const iSrc = head(/^Источники\s*:/i);
+  let iSrc = head(/^Источники\s*:/i);
+  const iNear = head(/^Ближайшее в базе\s*:/i);
+  const near = iSrc < 0 && iNear >= 0;
+  if (near) iSrc = iNear;
   const iQ = head(/^Цитаты\s*:/i);
-  let unknown = null, clarify = '';
+  let unknown = null, clarify = '', first = true;
   const body = [];
   const end = [iSrc, iQ].filter(i => i >= 0);
   const stop = end.length ? Math.min(...end) : lines.length;
   for (let i = 0; i < stop; i++) {
     const l = citeStrip(lines[i]);
     let m;
-    if ((m = l.match(/^Не знаю\s*[:—–-]\s*(.*)$/i)) && unknown === null) unknown = m[1].trim();
-    else if ((m = l.match(/^Уточните\s*[:—–-]\s*(.*)$/i))) clarify = m[1].trim();
+    if (first && l) {
+      first = false;
+      if ((m = l.match(/^Не знаю\s*[:—–-]\s*(.*)$/i))) { unknown = m[1].trim(); continue; }
+    }
+    if (unknown !== null && (m = l.match(/^Уточните\s*[:—–-]\s*(.*)$/i))) clarify = m[1].trim();
     else body.push(lines[i]);
   }
   const sources = [];
   if (iSrc >= 0) {
-    const part = lines.slice(iSrc, iQ > iSrc ? iQ : lines.length).map(citeStrip).join('\n').replace(/^Источники\s*:\s*/i, '');
-    const re = /\[(\d{1,2})\]\s*([^[\n]*?)\s*\(\s*`([^`\n]+)`\s*\)/g;
-    let m;
-    while ((m = re.exec(part))) sources.push({ n: Number(m[1]), label: m[2].replace(/[;,]\s*$/, '').trim(), id: m[3].trim() });
+    const part = lines.slice(iSrc, iQ > iSrc ? iQ : lines.length).map(citeStrip).join('\n')
+      .replace(/^(?:Источники|Ближайшее в базе)\s*:\s*/i, '');
+    const one = /^\[(\d{1,2})\]\s*(.*?)\s*(?:\(\s*`([^`\n]+)`\s*\)|`([^`\n]+)`)\s*[;,.]?$/;
+    for (const l of part.split('\n')) {
+      for (const e of l.trim().split(/[;,]\s*(?=\[\d{1,2}\]\s)/)) {
+        const x = e.trim().match(one);
+        if (x) sources.push({ n: Number(x[1]), label: x[2].replace(/[;,]\s*$/, '').trim(), id: (x[3] || x[4]).trim() });
+      }
+    }
     if (!sources.length) {
       // Запасной вид: нумерованный список «1. Статья › Раздел (`id`)».
       for (const l of part.split('\n')) {
@@ -2166,39 +2190,53 @@ function citeParse(text) {
       if (t) quotes.push({ n, id, text: t });
     }
   }
-  if (!sources.length && unknown === null) return null;
-  return { body: body.join('\n').trim(), sources, quotes, unknown, clarify };
+  if (!sources.length && unknown === null && unverified === null) return null;
+  return { body: body.join('\n').trim(), sources, near, quotes, unknown, clarify, unverified };
 }
 
 // citeReplyHTML — ответ kb_answer пузырём: плашка «не знаю», текст,
-// чипы источников, цитаты; не тот вид — null.
-function citeReplyHTML(text) {
+// плашка «не проверено», чипы источников, цитаты; не тот вид — null. cite —
+// итог хода из extras (rag.CiteView), если он есть: «не проверено» и
+// «не знаю решил код» берутся из проверки, а не из текста.
+function citeReplyHTML(text, cite) {
   const p = citeParse(text);
   if (!p) return null;
+  const check = (cite && cite.check) || {};
+  let unv = p.unverified;
+  if (check.unverified && unv === null) unv = (check.problems || []).join('; ');
+  const unvMark = unv !== null && p.unknown === null;
   let html = '';
   if (p.unknown !== null) {
-    html += `<div class="reply-unknown"><b>Не знаю</b>${p.unknown ? ': ' + esc(p.unknown) : ''}
+    const forced = check.forced ? `<div class="hint reply-forced">«не знаю» решил код${cite.gate_reason ? ': ' + esc(cite.gate_reason) : ''}</div>` : '';
+    html += `<div class="reply-unknown"><b>Не знаю</b>${p.unknown ? ': ' + esc(p.unknown) : ''}${forced}
       ${p.clarify ? `<div class="reply-clarify-q">Уточните: ${esc(p.clarify)}</div>
         <button type="button" class="small reply-clarify" data-action="citeClarify" data-arg="${esc(p.clarify)}" title="подставить вопрос в поле ввода подсказкой — отправлять не будет">уточнить ↓</button>` : ''}</div>`;
   }
   if (p.body) html += `<div class="reply-text">${md(p.body)}</div>`;
+  if (unvMark) {
+    html += `<div class="reply-unverified" role="note"><b>Не проверено</b>${unv ? ': ' + esc(unv) : ''}
+      <div class="hint">Ответ принят после отказов проверки: цитатам и числам этого ответа верить нельзя.</div></div>`;
+  }
   if (p.sources.length) {
-    html += `<div class="src-chips" aria-label="источники ответа">${p.sources.map(s => {
+    if (p.near) html += `<div class="src-near-h hint">Ближайшее в базе:</div>`;
+    html += `<div class="src-chips${p.near ? ' near' : ''}" aria-label="${p.near ? 'ближайшее найденное в базе' : 'источники ответа'}">${p.sources.map(s => {
       const q = p.quotes.find(x => x.id === s.id);
-      return `<button type="button" class="src-chip" data-chunk="${esc(s.id)}" data-n="${esc(s.n)}" data-action="citeOpen" data-arg="${esc(s.id)}" data-quote="${esc(q ? q.text : '')}" title="${esc(s.id + ' — открыть фрагмент в окне «База знаний»')}">[${esc(s.n)}] ${esc(s.label || s.id)}</button>`;
+      const tip = s.id + ' — открыть фрагмент в окне «База знаний»' + (unvMark ? ' (не проверено)' : '');
+      return `<button type="button" class="src-chip${unvMark ? ' unverified' : ''}" data-chunk="${esc(s.id)}" data-n="${esc(s.n)}" data-action="citeOpen" data-arg="${esc(s.id)}" data-quote="${esc(q ? q.text : '')}" title="${esc(tip)}">[${esc(s.n)}] ${esc(s.label || s.id)}${unvMark ? ' <span class="src-unv">не проверено</span>' : ''}</button>`;
     }).join('')}</div>`;
   }
   if (p.quotes.length) {
-    html += `<details class="src-quotes"><summary>${esc(plural(p.quotes.length, 'цитата', 'цитаты', 'цитат'))} из базы знаний</summary>${p.quotes.map(x =>
+    html += `<details class="src-quotes"><summary>${esc(plural(p.quotes.length, 'цитата', 'цитаты', 'цитат'))} из базы знаний${unvMark ? ' — не проверено' : ''}</summary>${p.quotes.map(x =>
       `<blockquote class="src-quote" data-chunk="${esc(x.id)}" data-n="${esc(x.n)}"><i>«${esc(x.text)}»</i>${x.id ? ` <button type="button" class="link src-quote-open" data-action="citeOpen" data-arg="${esc(x.id)}" data-quote="${esc(x.text)}" title="открыть фрагмент с подсветкой цитаты">[${esc(x.n || '?')}]</button>` : ''}</blockquote>`).join('')}</details>`;
   }
   return html;
 }
 
 // replyHTML — пузырь ответа: kb_answer — с источниками, иначе markdown.
-function replyHTML(text) {
-  const c = citeReplyHTML(text);
-  return c === null ? `<div class="bubble reply">${md(text)}</div>` : `<div class="bubble reply cited">${c}</div>`;
+// cite — итог rag.cite из extras хода (может не быть).
+function replyHTML(text, cite) {
+  const c = citeReplyHTML(text, cite);
+  return c === null ? `<div class="bubble reply">${md(text)}</div>` : `<div class="bubble reply cited${c.includes('reply-unverified') ? ' unverified' : ''}">${c}</div>`;
 }
 
 const composerHint = { placeholder: null };

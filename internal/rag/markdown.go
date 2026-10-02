@@ -57,18 +57,20 @@ func (r Report) Markdown() string {
 
 	if cited := r.citedStats(); len(cited) > 0 {
 		b.WriteString("\n## Источники и цитаты\n\n")
-		b.WriteString("Числа по прогонам: у каждого прогона свой kb_answer. Источники и цитаты считаются у ответов по существу (answered); " +
+		b.WriteString("Числа по прогонам: у каждого прогона свой kb_answer. Источники — у ответов по существу (answered) и у «не знаю» с непустой выдачей («ближайшее в базе»); " +
+			"«не знаю» при пустой выдаче (ниже порога) источников не имеет; цитаты — у ответов по существу; " +
 			"дословность — доля цитат, найденных в своём фрагменте после нормализации; смысл — судья раскладывает ответ на утверждения " +
 			"и проверяет каждое по цитатам (только по ним, не по памяти).\n\n")
-		b.WriteString("| режим | kb_answer | по существу | «не знаю» | из них кодом | «не знаю» на отвечаемых | с источниками | с цитатами | дословных цитат | смысл подтверждён | не проверено | отказов проверки |\n")
-		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+		b.WriteString("| режим | kb_answer | по существу | «не знаю» | из них кодом | «не знаю» на отвечаемых | «не знаю» без выдачи | с источниками | с цитатами | дословных цитат | смысл подтверждён | не проверено | отказов проверки |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 		for _, s := range cited {
 			support := "—"
 			if s.SupportChecked > 0 {
 				support = fmt.Sprintf("%d из %d", s.Supported, s.SupportChecked)
 			}
-			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d из %d | %d из %d | %.0f %% | %s | %d | %d |\n",
-				s.Mode, s.Cited, s.Answered, s.Unknown, s.ForcedUnknown, s.FalseUnknown, s.WithSources, s.Answered,
+			fmt.Fprintf(&b, "| `%s` | %d | %d | %d | %d | %d | %d | %d из %d | %d из %d | %.0f %% | %s | %d | %d |\n",
+				s.Mode, s.Cited, s.Answered, s.Unknown, s.ForcedUnknown, s.FalseUnknown, s.UnknownEmpty,
+				s.WithSources+s.UnknownNearSources, s.Answered+s.Unknown-s.UnknownEmpty,
 				s.WithQuotes, s.Answered, 100*s.Verbatim, support, s.Unverified, s.Rejects)
 		}
 	}
