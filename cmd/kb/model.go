@@ -102,7 +102,7 @@ func parseModes(s string) ([]rag.Mode, error) {
 		case m == "":
 			continue
 		case !m.Known():
-			return nil, fmt.Errorf("неизвестный режим %q (norag, rag, rag+filter, rag+rewrite, rag+both; both — norag и rag)", m)
+			return nil, fmt.Errorf("неизвестный режим %q (norag, rag, rag+filter, rag+rewrite, rag+both, rag+cite; both — norag и rag)", m)
 		}
 		if !seen[m] {
 			seen[m] = true

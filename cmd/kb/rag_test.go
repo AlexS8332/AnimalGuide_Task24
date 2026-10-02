@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -48,7 +49,12 @@ func (f *fakeDeepSeek) serve(t *testing.T) {
 		f.mu.Unlock()
 		sys, user := body.Messages[0].Content, body.Messages[len(body.Messages)-1].Content
 		var text string
+		var calls []any
 		switch {
+		case sys == rag.System(rag.RAGCite):
+			calls = citeCall(body.Messages[1].Content)
+		case sys == rag.SupportSystem():
+			text = `{"claims":[{"claim":"ответ","supported":true,"quote":1}]}`
 		case sys == rag.JudgeSystem():
 			text = `{"verdict":"abstain","reason":"сказано, что не знает"}`
 			if strings.Contains(user, "ВЕРНО") || strings.Contains(user, "По базе: ответ.") {
@@ -61,9 +67,13 @@ func (f *fakeDeepSeek) serve(t *testing.T) {
 		default:
 			text = "Не знаю."
 		}
+		msg, finish := map[string]any{"role": "assistant", "content": text}, "stop"
+		if calls != nil {
+			msg, finish = map[string]any{"role": "assistant", "content": "", "tool_calls": calls}, "tool_calls"
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"model":   body.Model,
-			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": text}, "finish_reason": "stop"}},
+			"choices": []any{map[string]any{"message": msg, "finish_reason": finish}},
 			"usage":   map[string]any{"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110, "prompt_cache_hit_tokens": 60, "prompt_cache_miss_tokens": 40},
 		})
 	}))
@@ -71,6 +81,23 @@ func (f *fakeDeepSeek) serve(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "test-key")
 	t.Setenv("DEEPSEEK_BASE_URL", srv.URL)
 	t.Setenv("DEEPSEEK_MODEL", "")
+}
+
+// fragmentRe — фрагмент в сообщении отвечающего агента (rag.Compose).
+var fragmentRe = regexp.MustCompile(`(?m)^\[([^\]\s]+/(?:structure|fixed)/\d+)\] [^\n]*\n([^\n]+)`)
+
+// citeCall — kb_answer подставной модели: дословная цитата из первого
+// фрагмента, а при пометке кода «релевантных фрагментов нет» — unknown.
+func citeCall(user string) []any {
+	c := rag.Cited{Status: rag.StatusUnknown, Answer: "в базе знаний нет данных об этом", Clarify: "О каком животном речь?"}
+	if m := fragmentRe.FindStringSubmatch(user); m != nil && !strings.Contains(user, "Пометка кода") {
+		r := []rune(m[2])
+		c = rag.Cited{Status: rag.StatusAnswered, Answer: "По базе: ответ.", Sources: []rag.CitedSource{{ChunkID: m[1]}},
+			Quotes: []rag.CitedQuote{{ChunkID: m[1], Text: string(r[:min(60, len(r))])}}}
+	}
+	args, _ := json.Marshal(c)
+	return []any{map[string]any{"id": "call_1", "type": "function",
+		"function": map[string]any{"name": rag.FinishName, "arguments": string(args)}}}
 }
 
 func (f *fakeDeepSeek) count() int {
