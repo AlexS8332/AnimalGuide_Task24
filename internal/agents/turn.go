@@ -68,7 +68,16 @@ type Request struct {
 	// блоком перед историей. Инструмент вызова должен быть в Tools, иначе
 	// Runner пропустит вызов с заметкой в журнале.
 	Preload []agent.Preload `json:"-"`
+	// Finish — завершающие инструменты хода (v24, механизм rag.cite): если
+	// заданы, ведущий обязан закончить вызовом одного из них, а не текстом
+	// (Spec.AllowText = false), и текст ответа берётся из принятого
+	// результата (интерфейс Texter), а не из сообщения модели.
+	Finish []agent.Finisher `json:"-"`
 }
+
+// Texter — результат завершающего инструмента, который сам знает свой
+// текст для человека (ответ с источниками и цитатами).
+type Texter interface{ Text() string }
 
 // System — системный промпт агента с абзацем правил хода.
 func (r Request) System(base string) string {
@@ -430,9 +439,18 @@ func (t *turn) lead(ctx context.Context, req Request) (agent.Reply, error) {
 	list := append(t.leadTools(ctx), src...)
 	list = append(list, req.Tools...)
 	spec := agent.Spec{Name: "lead", System: req.System(leadSystem), Tools: list, MaxSteps: leadMaxSteps}
+	if len(req.Finish) > 0 {
+		spec.Finish = req.Finish
+	}
 	blocks := withCards(t.d.Features, req.Blocks, t.state(), t.fs)
 	reply, err := t.d.Runner.Run(ctx, spec, agent.Prepared{Blocks: blocks, History: req.Window, User: req.Text, Features: t.fs, Preload: req.Preload}, t.em)
 	t.add(reply.Stats)
+	// Ход закрыт завершающим инструментом: текст сообщений модели почти
+	// всегда пуст (она звала инструмент, а не писала), ответ человеку —
+	// текст принятого результата.
+	if tx, ok := reply.Final.(Texter); ok && err == nil {
+		reply.Text = tx.Text()
+	}
 	return reply, err
 }
 

@@ -48,7 +48,9 @@ const (
 )
 
 // Pipelined — режим идёт через конвейер retrieve (а не прямой поиск).
-func (m Mode) Pipelined() bool { return m == RAGFilter || m == RAGRewrite || m == RAGBoth }
+func (m Mode) Pipelined() bool {
+	return m == RAGFilter || m == RAGRewrite || m == RAGBoth || m == RAGCite
+}
 
 // UsesBase — режим с базой знаний.
 func (m Mode) UsesBase() bool { return m != NoRAG }
@@ -83,6 +85,10 @@ type Answer struct {
 	// Trace — путь поиска через конвейер retrieve (режимы v23); nil у
 	// прямого поиска и norag.
 	Trace *retrieve.Trace `json:"trace,omitempty"`
+	// Cited — ответ kb_answer с проверкой кодом (режим RAGCite); Support —
+	// проверка смысла судьёй (заполняет Eval, если есть судья).
+	Cited   *CitedResult `json:"cited,omitempty"`
+	Support *Support     `json:"support,omitempty"`
 	// Prompt — что ушло модели (для вкладки и отчёта): system и user.
 	System string `json:"system"`
 	User   string `json:"user"`
@@ -115,7 +121,9 @@ func ModeConfig(m Mode) retrieve.Config {
 		return retrieve.Config{Filter: true}
 	case RAGRewrite:
 		return retrieve.Config{Rewrite: retrieve.RewriteCode}
-	case RAGBoth:
+	case RAGBoth, RAGCite:
+		// rag+cite (v24) ищет так же, как rag+both: отличается только
+		// ответом — kb_answer с проверкой.
 		// Без гибридного реранкинга: на dev гибрид в both дал только −D16
 		// (ранг 5 → 12) и MRR 0.63 → 0.53 (матрица v23,
 		// examples/rag/filter.md). Гибрид — отдельная строка матрицы
@@ -126,7 +134,7 @@ func ModeConfig(m Mode) retrieve.Config {
 }
 
 // Modes — все режимы ответа по порядку (для разбора флагов).
-var Modes = []Mode{NoRAG, RAG, RAGFilter, RAGRewrite, RAGBoth}
+var Modes = []Mode{NoRAG, RAG, RAGFilter, RAGRewrite, RAGBoth, RAGCite}
 
 // Known — режим известен.
 func (m Mode) Known() bool {
