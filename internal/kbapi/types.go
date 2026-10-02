@@ -30,6 +30,13 @@
 // Режимы ask и evals — norag, rag, rag+filter, rag+rewrite, rag+both; ask —
 // до трёх режимов рядом. rewrite=llm и rerank=llm платные: 503 без модели.
 //
+// v24 — ответ с источниками и цитатами:
+//
+//	режим rag+cite в ask и evals: в rag.Answer — cited (ответ kb_answer и
+//	    проверка кодом) и support (судья смысла, если был)
+//	GET /api/kb/chunk/{chunk_id} ChunkView: текст чанка, путь раздела и
+//	    документ — открыть цитату без загрузки всего документа (404 — нет чанка)
+//
 // Коды: 400 — неверный запрос; 404 — нет документа, индекса или отчёта;
 // 405 — не тот метод; 503 — базы нет (в теле why и hint: как её собрать).
 // Всё, что пришло из корпуса, интерфейс выводит как данные (esc), а не
@@ -132,6 +139,12 @@ type DocView struct {
 	Text   string     `json:"text"`
 	Index  string     `json:"index"`
 	Chunks []kb.Chunk `json:"chunks"`
+}
+
+// ChunkView — GET chunk/{id}: чанк с текстом и его документ.
+type ChunkView struct {
+	Chunk kb.Chunk   `json:"chunk"`
+	Doc   kb.DocInfo `json:"doc"`
 }
 
 // SearchView — GET search: по результату на каждый запрошенный индекс.

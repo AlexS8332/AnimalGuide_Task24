@@ -76,7 +76,8 @@ func (a *API) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
-	case path == "info", path == "docs", path == "search", path == "report", strings.HasPrefix(path, "docs/"):
+	case path == "info", path == "docs", path == "search", path == "report", strings.HasPrefix(path, "docs/"),
+		strings.HasPrefix(path, "chunk/"):
 	default:
 		server.WriteError(w, http.StatusNotFound, "нет такого раздела: "+Prefix+path)
 		return
@@ -101,6 +102,8 @@ func (a *API) handle(w http.ResponseWriter, r *http.Request) {
 		a.search(w, r)
 	case path == "report":
 		a.report(w, r)
+	case strings.HasPrefix(path, "chunk/"):
+		a.chunk(w, r, strings.TrimPrefix(path, "chunk/"))
 	default:
 		a.doc(w, r, strings.TrimPrefix(path, "docs/"))
 	}
@@ -253,6 +256,35 @@ func (a *API) doc(w http.ResponseWriter, r *http.Request, id string) {
 	for _, c := range chunks {
 		c.Text = ""
 		v.Chunks = append(v.Chunks, c)
+	}
+	server.WriteJSON(w, http.StatusOK, v)
+}
+
+// chunk — один чанк с текстом и его документ (v24): цитата из ответа
+// открывается без загрузки всего документа. chunk_id — «doc/strategy/ord»,
+// косые черты — часть id.
+func (a *API) chunk(w http.ResponseWriter, r *http.Request, id string) {
+	ctx := r.Context()
+	if id == "" {
+		server.WriteError(w, http.StatusNotFound, "нужен chunk_id: "+Prefix+"chunk/{doc}/{strategy}/{ord}")
+		return
+	}
+	c, err := a.Searcher.Store.Chunk(ctx, id)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	infos, err := a.Searcher.Store.Docs(ctx)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	v := ChunkView{Chunk: c, Doc: kb.DocInfo{ID: c.DocID, Title: c.Title, Source: c.Source, URL: c.URL, RevID: c.RevID}}
+	for _, x := range infos {
+		if x.ID == c.DocID {
+			v.Doc = x
+			break
+		}
 	}
 	server.WriteJSON(w, http.StatusOK, v)
 }

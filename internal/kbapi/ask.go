@@ -132,8 +132,9 @@ func (a *API) noModel(w http.ResponseWriter) {
 	server.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{"error": why, "why": why, "hint": HintNoModel})
 }
 
-// allModes — режимы ответа (v23: плюс три режима с конвейером retrieve).
-var allModes = []rag.Mode{rag.NoRAG, rag.RAG, rag.RAGFilter, rag.RAGRewrite, rag.RAGBoth}
+// allModes — режимы ответа (v23: плюс три режима с конвейером retrieve;
+// v24: rag+cite — ответ kb_answer с источниками и цитатами).
+var allModes = []rag.Mode{rag.NoRAG, rag.RAG, rag.RAGFilter, rag.RAGRewrite, rag.RAGBoth, rag.RAGCite}
 
 // validMode — режим из allModes.
 func validMode(m rag.Mode) bool {
