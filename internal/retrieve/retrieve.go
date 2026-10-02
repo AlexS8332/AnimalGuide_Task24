@@ -143,8 +143,8 @@ type Trace struct {
 	Anchored []string `json:"anchored,omitempty"`
 	// Scope — документы названных видов, которыми рамка якоря ограничила
 	// выдачу (Config.Scope; добавление v24); пусто — рамки не было.
-	Scope  []string `json:"scope,omitempty"`
-	Config Config   `json:"config"`
+	Scope    []string `json:"scope,omitempty"`
+	Config   Config   `json:"config"`
 	MinScore float64  `json:"min_score"` // фактический порог
 	// MinScoreFrom — откуда порог: "настройки", "индекс" или "умолчание"
 	// (MinScoreOf; добавление v23).
