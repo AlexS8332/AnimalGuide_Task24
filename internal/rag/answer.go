@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/AlexS8332/AnimalGuide_Task24/internal/agent"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/kb"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/llm"
 	"github.com/AlexS8332/AnimalGuide_Task24/internal/retrieve"
@@ -26,15 +27,45 @@ const answerSystem = `Ты — справочник о животных. Отв�
 // и фрагменты — хвост запроса.
 const ragRule = `К вопросу приложены фрагменты базы знаний справочника. Опирайся только на них, а не на свою память: если фрагменты расходятся с тем, что ты помнишь, верны фрагменты. Называй источники — chunk_id фрагментов в квадратных скобках, например [manul/structure/004]. Если во фрагментах ответа нет — так и скажи: «в базе знаний этого нет», и не дополняй ответ по памяти.`
 
+// citeRule — правило kb_answer (режим rag+cite, v24): идёт после ragRule.
+// ragRule велит называть [chunk_id] в тексте — здесь это уточнено: ссылки
+// уходят в sources, а не в answer. Слово «ДОСЛОВНО» и запрет пересказа —
+// главное: цитата, которую модель «улучшила» (сократила, поправила падеж,
+// переставила слова), не проходит проверку кодом и стоит отказа и ещё
+// одного запроса. «Числа — только из цитат» — та же проверка с другой
+// стороны: число ответа без цитаты — это число без опоры. Как говорить
+// «не знаю» — подробно: answer «в базе знаний нет …» (его читает человек
+// после «Не знаю:») и уточнение по ближайшему найденному, без фактов в
+// нём — иначе уточняющий вопрос становился бы ответом по памяти.
+const citeRule = `Ответ отдавай только вызовом инструмента kb_answer, не текстом:
+- status: answered — ответ есть во фрагментах; unknown — ответа во фрагментах нет (и тогда, когда о животном фрагменты есть, а нужного факта в них нет).
+- answer: прямой ответ кратко, одно-три предложения, без ссылок [chunk_id]. Каждое число ответа должно стоять в одной из цитат.
+- sources: chunk_id фрагментов, на которых держится ответ, — только из приложенных.
+- quotes: одна-три цитаты, подтверждающие ответ: кусок текста фрагмента с этим chunk_id, скопированный ДОСЛОВНО — без пересказа, сокращений и правки слов, чисел и знаков, не короче 15 символов; пропуск внутри цитаты отмечай «…». Факты и числа ответа — только из цитат.
+- unknown: answer — чего именно нет («в базе знаний нет данных о …»), clarify — уточняющий вопрос человеку по ближайшему, что нашлось во фрагментах (без фактов в нём), sources и quotes — пустые списки.
+Если kb_answer вернул ошибку — исправь ровно то, что в ней названо, и вызови kb_answer снова.`
+
+// gateNote — пометка в сообщении пользователя, когда «не знаю» решил код
+// (Gate): модель знает, почему answered недоступен, и формулирует
+// уточнение, а не ищет, как ответить.
+const gateNote = "Пометка кода: релевантных фрагментов нет — %s. Ответ на этот вопрос — только kb_answer со status unknown и уточняющим вопросом в clarify."
+
 // System — системный промпт режима (для вкладки и тестов).
 // Режимы v23 (rag+filter, rag+rewrite, rag+both) — тот же промпт, что у
-// rag: отличаются только фрагменты.
+// rag: отличаются только фрагменты. rag+cite (v24) — тот же промпт и
+// правило kb_answer последним абзацем.
 func System(mode Mode) string {
-	if mode.UsesBase() {
+	switch {
+	case mode == RAGCite:
+		return answerSystem + "\n\n" + ragRule + "\n\n" + citeRule
+	case mode.UsesBase():
 		return answerSystem + "\n\n" + ragRule
 	}
 	return answerSystem
 }
+
+// CiteRule — правило kb_answer (для отчёта и тестов).
+func CiteRule() string { return citeRule }
 
 // Query — строка поиска по вопросу: предыдущие реплики и сам вопрос через
 // пробел (как в kb.Compare). Вопрос-продолжение «а сколько она весит?» без
@@ -101,10 +132,10 @@ func (a *Answerer) Answer(ctx context.Context, q Question, mode Mode) (Answer, e
 			return Answer{}, fmt.Errorf("поиск по базе знаний (%s): %w", mode, err)
 		}
 		out.Trace = &t
-		out.Hits, out.Search = t.Hits, t.Info
+		out.Hits, out.Search = a.plant(q, t.Hits), t.Info
 		// Пустой итог фильтра — та же явная строка «ничего не найдено»,
 		// что у пустой выдачи: модель должна сказать «в базе этого нет».
-		out.User += "\n\n" + Compose(t.Hits)
+		out.User += "\n\n" + Compose(out.Hits)
 	case mode == RAG:
 		if a.Searcher == nil {
 			return Answer{}, errors.New("режим rag без базы знаний: соберите её командой kb index")
@@ -113,8 +144,11 @@ func (a *Answerer) Answer(ctx context.Context, q Question, mode Mode) (Answer, e
 		if err != nil {
 			return Answer{}, fmt.Errorf("поиск по базе знаний: %w", err)
 		}
-		out.Hits, out.Search = hits, info
-		out.User += "\n\n" + Compose(hits)
+		out.Hits, out.Search = a.plant(q, hits), info
+		out.User += "\n\n" + Compose(out.Hits)
+	}
+	if mode == RAGCite {
+		return a.cite(ctx, out)
 	}
 	msgs := []llm.Message{{Role: llm.RoleSystem, Content: out.System}, {Role: llm.RoleUser, Content: out.User}}
 
@@ -133,6 +167,60 @@ func (a *Answerer) Answer(ctx context.Context, q Question, mode Mode) (Answer, e
 		out.Usage = out.Usage.Add(out.Trace.Usage)
 		out.Cost = out.Cost.Add(out.Trace.Cost)
 	}
+	return out, nil
+}
+
+// plant — выдача с подставными фрагментами (Plant).
+func (a *Answerer) plant(q Question, hits []kb.Hit) []kb.Hit {
+	if a.Plant == nil {
+		return hits
+	}
+	extra := a.Plant(q)
+	if len(extra) == 0 {
+		return hits
+	}
+	out := append(append([]kb.Hit(nil), hits...), extra...)
+	for i := range out {
+		out[i].Rank = i + 1
+	}
+	return out
+}
+
+// citeSteps — предел запросов rag+cite: первый ответ, по запросу на каждый
+// отказ проверки и на каждое напоминание «ответь инструментом».
+const citeSteps = 1 + MaxRejects + agent.MaxReminders
+
+// cite — ответ rag+cite: Gate по трассе (выдача пуста или фильтр отсёк
+// всё → схема kb_answer только с unknown и пометка в сообщении), затем
+// agent.Runner с одним завершающим инструментом kb_answer без права
+// закончить текстом. Текст ответа — CitedResult.Text, оценка — по
+// Cited (Eval). Цена — сумма шагов и платных шагов конвейера.
+func (a *Answerer) cite(ctx context.Context, out Answer) (Answer, error) {
+	gated, why := Gate(out.Trace, out.Hits)
+	if gated {
+		out.User += "\n\n" + fmt.Sprintf(gateNote, why)
+	}
+	hits := out.Hits
+	fin := Finisher(func() []kb.Hit { return hits }, gated, why)
+	spec := agent.Spec{Name: "answerer", System: out.System, Finish: []agent.Finisher{fin}, AllowText: false, MaxSteps: citeSteps}
+	r := agent.Runner{LLM: a.LLM, Model: a.model(), Temperature: 0}
+	started := time.Now()
+	reply, err := r.Run(ctx, spec, agent.Prepared{User: out.User}, nil)
+	out.Millis = time.Since(started).Milliseconds()
+	out.Usage, out.Cost = reply.Stats.Usage, reply.Stats.Cost
+	if out.Trace != nil && out.Trace.Usage.Total > 0 {
+		out.Usage = out.Usage.Add(out.Trace.Usage)
+		out.Cost = out.Cost.Add(out.Trace.Cost)
+	}
+	if err != nil {
+		return out, fmt.Errorf("модель (%s): %w", RAGCite, err)
+	}
+	res, ok := reply.Final.(*CitedResult)
+	if !ok {
+		return out, fmt.Errorf("модель (%s): kb_answer не принят", RAGCite)
+	}
+	out.Cited = res
+	out.Text = res.Text()
 	return out, nil
 }
 
@@ -164,6 +252,7 @@ func (a *Answerer) Config(m Mode) retrieve.Config {
 			c.Delta = o.Delta
 		}
 		c.Filter = c.Filter || o.Filter
+		c.Scope = c.Scope || o.Scope
 	}
 	if c.Index == "" {
 		c.Index = a.index()

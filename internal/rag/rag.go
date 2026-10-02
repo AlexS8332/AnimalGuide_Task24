@@ -108,6 +108,10 @@ type Answerer struct {
 	// умолчаний ModeConfig.
 	Pipeline *retrieve.Pipeline
 	Configs  map[Mode]retrieve.Config
+	// Plant — подставные фрагменты к выдаче режимов с базой (испытание
+	// инъекции, И-12 часть B): что вернёт, встаёт в конец выдачи и
+	// считается выданным в этом ходе. nil — без подстановки.
+	Plant func(q Question) []kb.Hit
 }
 
 // ModeConfig — настройки конвейера по умолчанию для режима v23: filter —
@@ -128,7 +132,11 @@ func ModeConfig(m Mode) retrieve.Config {
 		// (ранг 5 → 12) и MRR 0.63 → 0.53 (матрица v23,
 		// examples/rag/filter.md). Гибрид — отдельная строка матрицы
 		// (retrieve.Presets «hybrid»).
-		return retrieve.Config{Rewrite: retrieve.RewriteCode, Filter: true}
+		//
+		// С v24 — с рамкой якоря (Scope): при названном виде фрагменты
+		// статей о других видах отсекаются (на dev recall не изменился —
+		// карточка 24, examples/rag/filter.md).
+		return retrieve.Config{Rewrite: retrieve.RewriteCode, Filter: true, Scope: true}
 	}
 	return retrieve.Config{}
 }
@@ -213,6 +221,9 @@ type Run struct {
 	// JudgeError — судья не ответил или ответил неразборчиво: Final тогда
 	// по правилу, а прогон не входит в согласие голосов (v22, добавление).
 	JudgeError string `json:"judge_error,omitempty"`
+	// SupportError — судья смысла (rag+cite) не ответил или ответил
+	// неразборчиво: Answer.Support тогда пуст (v24).
+	SupportError string `json:"support_error,omitempty"`
 }
 
 // Row — вопрос в отчёте: прогоны по режимам и вердикт большинства.
@@ -255,7 +266,33 @@ type ModeStats struct {
 	// судьи не было, и согласие не определено (v22, добавление).
 	Judged int `json:"judged"`
 	// Flips — смен вердикта между повторами по всем вопросам режима.
-	Flips     int       `json:"flips"`
+	Flips int `json:"flips"`
+
+	// Числа rag+cite (v24) — по прогонам, а не по большинству: у каждого
+	// прогона свой kb_answer. Cited — прогонов с принятым kb_answer;
+	// Answered, Unknown — из них по статусу.
+	Cited    int `json:"cited,omitempty"`
+	Answered int `json:"answered,omitempty"`
+	Unknown  int `json:"unknown,omitempty"`
+	// WithSources, WithQuotes — answered-ответов хотя бы с одним источником
+	// и одной цитатой.
+	WithSources int `json:"with_sources,omitempty"`
+	WithQuotes  int `json:"with_quotes,omitempty"`
+	// Verbatim — доля дословных цитат среди всех цитат answered-ответов.
+	Verbatim float64 `json:"verbatim,omitempty"`
+	// Supported — answered-ответов, где судья смысла подтвердил все
+	// утверждения цитатами; SupportChecked — сколько он проверил.
+	Supported      int `json:"supported,omitempty"`
+	SupportChecked int `json:"support_checked,omitempty"`
+	// Unverified — принятых после MaxRejects отказов (проверку не прошли);
+	// Rejects — отказов проверки всего.
+	Unverified int `json:"unverified,omitempty"`
+	Rejects    int `json:"rejects,omitempty"`
+	// ForcedUnknown — «не знаю», которое потребовал код (Gate);
+	// FalseUnknown — «не знаю» на отвечаемом вопросе.
+	ForcedUnknown int `json:"forced_unknown,omitempty"`
+	FalseUnknown  int `json:"false_unknown,omitempty"`
+
 	Usage     llm.Usage `json:"usage"`
 	Cost      llm.Cost  `json:"cost"`
 	AvgMillis int64     `json:"avg_ms"`
