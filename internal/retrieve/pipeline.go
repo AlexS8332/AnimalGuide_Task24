@@ -173,7 +173,14 @@ func (p *Pipeline) gather(ctx context.Context, q Query, c Config) (Trace, error)
 	// Якорь — виды, названные в самой реплике (не из контекста).
 	t.Anchored = al.Species(t.Original)
 	if c.Scope && c.Filter {
-		scopeOf(al, &t)
+		if amb := al.Ambiguous(t.Original); len(amb) > 0 && len(t.Anchored) > 0 {
+			// «Чем питается рысь и сколько весит росомаха?»: «рысь» — вид,
+			// которого словарь не раскрывает, и рамка по росомахе отсекла бы
+			// статью о рыси. Рамки нет — отсекают только пороги.
+			t.Note = joinNote(t.Note, "рамка якоря не применена: в реплике неоднозначное название «"+strings.Join(amb, "», «")+"»")
+		} else {
+			scopeOf(al, &t)
+		}
 	}
 
 	// 2. Кандидаты.
@@ -317,6 +324,25 @@ func continuation(al *Aliases, text string) bool {
 		}
 	}
 	return len(toks) < shortReply
+}
+
+// Names — словарь названий конвейера (тот же, что у Search, грузится один
+// раз): для решений вне поиска — якорь вызова kb_search без фильтра, вид,
+// названный в ответе (добавление v24).
+func (p *Pipeline) Names(ctx context.Context) (*Aliases, error) {
+	if p == nil {
+		return nil, errors.New("конвейера нет")
+	}
+	p.mu.Lock()
+	al := p.Aliases
+	p.mu.Unlock()
+	if al != nil {
+		return al, nil
+	}
+	if p.Searcher == nil || p.Searcher.Store == nil {
+		return nil, errors.New("конвейеру не передана база знаний")
+	}
+	return p.aliases(ctx)
 }
 
 // aliases — словарь: заданный или из базы при первом вызове.
@@ -476,20 +502,49 @@ func (t *Trace) outOfScope(docID string) bool {
 // ФРАГМЕНТОВ ВНУТРИ РАМКИ: если лучший кандидат — фрагмент чужого вида
 // («кошачий медведь» тянет медведей), относительный порог от него отсекал
 // бы фрагменты названного вида, и выдача пустела бы целиком.
+//
+// Ориентир у каждого названного вида свой — лучший фрагмент его статьи: в
+// «харза или соболь» статья о харзе ближе к запросу, и порог от её лучшего
+// фрагмента отсекал бы всю статью о соболе. Фрагменты обзорных статей и
+// MDD (вне speciesDocs) меряются от лучшего в рамке, как раньше.
 func scopedLeads(t *Trace) {
 	if len(t.cos) == 0 {
 		return
 	}
-	in := make([]map[string]float64, len(t.cos))
-	for i, m := range t.cos {
-		in[i] = map[string]float64{}
-		for _, x := range t.Candidates {
-			if v, ok := m[x.ID]; ok && !t.outOfScope(x.DocID) {
-				in[i][x.ID] = v
+	doc := make(map[string]string, len(t.Candidates))
+	for _, x := range t.Candidates {
+		doc[x.ID] = x.DocID
+	}
+	for j := range t.Candidates {
+		t.Candidates[j].hasLead = false
+	}
+	for _, m := range t.cos {
+		top, perDoc := 0.0, map[string]float64{}
+		for id, v := range m {
+			d := doc[id]
+			if t.outOfScope(d) {
+				continue
+			}
+			top = math.Max(top, v)
+			if t.speciesDocs[d] {
+				perDoc[d] = math.Max(perDoc[d], v)
+			}
+		}
+		for j := range t.Candidates {
+			x := &t.Candidates[j]
+			v, ok := m[x.ID]
+			if !ok {
+				continue
+			}
+			ref := top
+			if r, ok := perDoc[x.DocID]; ok {
+				ref = r
+			}
+			if d := v - ref; !x.hasLead || d > x.lead {
+				x.lead, x.hasLead = d, true
 			}
 		}
 	}
-	leads(t, in)
 }
 
 // bm25Query — запрос i для BM25: из QueriesBM25, если он там есть.
@@ -605,6 +660,13 @@ func order(t *Trace) {
 // finish — фильтр и K1 по уже упорядоченным кандидатам (идемпотентен:
 // матрица применяет его к одной выдаче с разными K1, калибровка — с
 // разными порогами).
+//
+// Рамка с несколькими названными видами («харза или соболь», «манул и
+// ирбис»): лучший прошедший фильтр фрагмент КАЖДОГО вида попадает в K1 в
+// любом случае — иначе статья, которая ближе к запросу, занимала бы все K1
+// мест, и о втором виде в выдаче не было бы ни слова. Порядок выдачи — тот
+// же (Final); место под оговорённый фрагмент освобождается за счёт
+// последних.
 func finish(t *Trace) {
 	c := t.Config
 	dense := t.Info.Mode == kb.Dense
@@ -618,30 +680,48 @@ func finish(t *Trace) {
 	if scoped {
 		scopedLeads(t)
 	}
-	var keptSpans []Candidate
-	t.Hits = nil
-	kept := 0
 	for i := range t.Candidates {
 		x := &t.Candidates[i]
 		x.Kept, x.Reason = false, ""
-		if c.Filter {
-			switch {
-			case dense && len(t.Anchored) == 0 && x.Dense < t.MinScore:
-				x.Reason = reasonFloor(t.MinScore)
-			case scoped && t.outOfScope(x.DocID):
-				x.Reason = ReasonScope
-			case dense && x.behind(t.TopDense) > c.Delta+1e-12 && !exempt(*x, c, half):
-				x.Reason = reasonRelative(c.Delta)
-			case !dense && x.BM25 < BM25Floor*topBM25:
-				x.Reason = reasonBM25()
-			case llmScored && x.Rerank == 0:
-				x.Reason = ReasonLLM
-			}
-			if x.Reason == "" && duplicate(*x, keptSpans) {
-				x.Reason = ReasonDup
+		if !c.Filter {
+			continue
+		}
+		switch {
+		case dense && len(t.Anchored) == 0 && x.Dense < t.MinScore:
+			x.Reason = reasonFloor(t.MinScore)
+		case scoped && t.outOfScope(x.DocID):
+			x.Reason = ReasonScope
+		case dense && x.behind(t.TopDense) > c.Delta+1e-12 && !exempt(*x, c, half):
+			x.Reason = reasonRelative(c.Delta)
+		case !dense && x.BM25 < BM25Floor*topBM25:
+			x.Reason = reasonBM25()
+		case llmScored && x.Rerank == 0:
+			x.Reason = ReasonLLM
+		}
+	}
+	reserved := map[int]bool{}
+	if scoped && len(t.Scope) > 1 {
+		for _, doc := range t.Scope {
+			for i, x := range t.Candidates {
+				if x.Reason == "" && x.DocID == doc && len(reserved) < c.K1 {
+					reserved[i] = true
+					break
+				}
 			}
 		}
-		if x.Reason == "" && kept >= c.K1 {
+	}
+	var keptSpans []Candidate
+	t.Hits = nil
+	kept, owed := 0, len(reserved)
+	for i := range t.Candidates {
+		x := &t.Candidates[i]
+		if x.Reason == "" && c.Filter && duplicate(*x, keptSpans) {
+			x.Reason = ReasonDup
+		}
+		if reserved[i] {
+			owed--
+		}
+		if x.Reason == "" && !reserved[i] && kept+owed >= c.K1 {
 			x.Reason = ReasonBeyond
 		}
 		if x.Reason != "" {
