@@ -3,7 +3,7 @@
   "slug": "animal-guide-rag-cite",
   "title": "AnimalGuide: ответы с обязательными источниками и цитатами, режим «не знаю» (DeepSeek, Go + браузер)",
   "stack": "go",
-  "status": "planned",
+  "status": "done",
   "created": "2026-10-02",
   "updated": "2026-10-02",
   "repo": "",
